@@ -1,59 +1,50 @@
 import torch
 from transformers import DynamicCache
 
-from .base import Generator
+from .base import Base
 
 __all__ = ["AutoRegressive"]
 
 
-class AutoRegressive(Generator):
+class AutoRegressive(Base):
     @torch.no_grad()
     def generate(self, input_ids: torch.Tensor, max_new_tokens: int, **kwargs):
-        batch_size, input_len = input_ids.shape
-        assert batch_size == 1, "batch_size must be 1"
-        n_ctx = input_len + max_new_tokens
+        n_batch, n_input = input_ids.shape
+        assert n_batch == 1, "batch size must be 1"
+        n_ctx = n_input + max_new_tokens
 
         cache = DynamicCache()
-        tokens = torch.clone(input_ids)
+        all_tokens = torch.clone(input_ids)  # [1, n_past + n_token]
         while True:
             n_past = cache.get_seq_length()
             print(f"=== {n_past} ===")
-            cur_tokens = tokens[:, n_past:]
-            n_token = cur_tokens.shape[1]
+
+            # Input
+            in_tokens = all_tokens[:, n_past:]
+            n_token = in_tokens.shape[1]  # [1, n_token]
+            attention_mask = self.prepare_attention_mask(n_past, n_token)
+            position_ids = self.prepare_position_ids(n_past, n_token)
 
             # Forward
             output = self.model(
-                input_ids=cur_tokens,
-                attention_mask=self.prepare_attention_mask(n_past, n_token),
-                position_ids=self.prepare_position_ids(n_past, n_token),
+                input_ids=in_tokens,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
                 past_key_values=cache,
                 return_dict=True,
                 logits_to_keep=1,
             )
 
             # Output
-            logits = output.logits
-            gen_ids = torch.argmax(logits, dim=-1)
-            tokens = torch.cat((tokens, gen_ids), dim=-1)
-
-            if self.is_finished(tokens, n_ctx, gen_ids):
-                return tokens
+            out_tokens = torch.argmax(output.logits, dim=-1)  # [1, 1]
+            all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
 
             # Update
             cache: DynamicCache = output.past_key_values
+            cache.crop(all_tokens.shape[1] - 1)
 
-    def is_eos(self, token: int):
-        return token in self.get_eos_token_ids()
-
-    def is_finished(self, tokens: torch.Tensor, n_ctx: int, gen_ids: torch.Tensor):
-        if tokens.shape[1] >= n_ctx:
-            return True
-
-        for token in gen_ids[0]:
-            if self.is_eos(token):
-                return True
-
-        return False
+            if self.is_finished(all_tokens, n_ctx, out_tokens):
+                return all_tokens
 
     def prepare_attention_mask(self, n_past: int, n_token: int):
         # return attention_mask: [1, 1, n_token, n_past + n_token]

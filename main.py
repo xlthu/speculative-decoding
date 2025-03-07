@@ -1,16 +1,16 @@
 import argparse
-import gen
+import decoding
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer
 
 
 def wrap_model_with_gen(model, args):
     match args.gen:
         case "hf":
-            return gen.Generator(model)
+            return decoding.Base(model)
         case "ar":
-            return gen.AutoRegressive(model)
+            return decoding.AutoRegressive(model)
         case "pld":
-            return gen.PLD(model)
+            return decoding.PLD(model)
         case _:
             assert ValueError(args.gen)
 
@@ -18,7 +18,7 @@ def wrap_model_with_gen(model, args):
 
 
 def gen_one(
-    model: gen.Generator,
+    model: decoding.Base,
     tokenizer: PreTrainedTokenizer,
     prompt: str,
 ):
