@@ -1,0 +1,21 @@
+[project]
+name = "spec"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "xlthu",email = "xie.lei@foxmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "transformers (>=4.49.0,<5.0.0)",
+    "torch (>=2.6.0,<3.0.0)",
+    "accelerate (>=1.4.0,<2.0.0)"
+]
+
+[tool.poetry]
+package-mode = false
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
