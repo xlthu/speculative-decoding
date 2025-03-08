@@ -1,12 +1,13 @@
 import torch
 from transformers import DynamicCache
 
-from .ar import AutoRegressive
+from .base import Base
+from .utils import chain_attention_mask, chain_position_ids
 
 __all__ = ["PLD"]
 
 
-class PLD(AutoRegressive):
+class PLD(Base):
     def __init__(self, model, max_matching_ngram_size=2, prompt_lookup_num_tokens=3):
         """
         Args:
@@ -33,8 +34,8 @@ class PLD(AutoRegressive):
         in_tokens = torch.cat((all_tokens[:, n_past:], dchain), dim=-1)
         n_token = in_tokens.shape[1]  # [1, n_token]
 
-        attention_mask = self.prepare_attention_mask(n_past, n_token)
-        position_ids = self.prepare_position_ids(n_past, n_token)
+        attention_mask = chain_attention_mask(n_past, n_token, self.dtype, self.device)
+        position_ids = chain_position_ids(n_past, n_token, self.device)
 
         # Record
         self.dchain = dchain

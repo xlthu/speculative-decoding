@@ -2,7 +2,8 @@ import torch
 from transformers import DynamicCache
 
 from .base import Base
-from .dtree import *
+from .dtree import DraftTree
+from .utils import tree_attention_mask, tree_position_ids
 
 __all__ = ["Recycle"]
 
@@ -28,8 +29,10 @@ class Recycle(Base):
 
         # Input
         in_tokens = torch.cat((dc_tokens, dr_tokens), dim=-1)
-        attention_mask = self.prepare_attention_mask(n_past, n_dc, dtree)
-        position_ids = self.prepare_position_ids(n_past, n_dc, dtree)
+        attention_mask = tree_attention_mask(
+            n_past, n_dc, dtree, self.dtype, self.device
+        )
+        position_ids = tree_position_ids(n_past, n_dc, dtree, self.device)
 
         # Record
         self.dtree = dtree
@@ -55,41 +58,6 @@ class Recycle(Base):
         # n[5].add(n[6])
 
         return dtree.done()
-
-    def prepare_attention_mask(self, n_past: int, n_dc: int, dtree: DraftTree):
-        # return attention_mask: [1, 1, n_dc + n_dr, n_past + n_dc + n_dr]
-        # 0: allow attention, -inf: not allow attention
-        n_dr = dtree.size()
-        min_dtype = torch.finfo(self.dtype).min
-
-        lmask = torch.full(
-            size=(n_dc + n_dr, n_past + n_dc),
-            fill_value=min_dtype,
-            dtype=self.dtype,
-            device=self.device,
-        )
-        lmask = torch.triu(lmask, diagonal=n_past + 1)
-
-        rmask = torch.full(
-            size=(n_dc + n_dr, n_dr),
-            fill_value=min_dtype,
-            dtype=self.dtype,
-            device=self.device,
-        )
-        dr_mask = rmask[n_dc:, :]
-        dtree.zero_mask(dr_mask)
-
-        mask = torch.cat((lmask, rmask), dim=-1)
-        mask = mask.reshape(1, 1, *mask.shape)
-
-        return mask
-
-    def prepare_position_ids(self, n_past: int, n_dc: int, dtree: DraftTree):
-        # return position_ids: [1, n_dc + n_dr]
-        dc_pos = torch.arange(n_past, n_past + n_dc, device=self.device).unsqueeze(0)
-        dr_pos = dtree.position_ids(n_past + n_dc, self.device)
-        pos = torch.cat((dc_pos, dr_pos), dim=-1)
-        return pos
 
     ### Output
 
