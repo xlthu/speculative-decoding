@@ -3,8 +3,8 @@ import decoding
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer
 
 
-def wrap_model_with_gen(model, args):
-    match args.gen:
+def apply_dec(model, args):
+    match args.dec:
         case "hf":
             return decoding.HF(model)
         case "ar":
@@ -14,7 +14,7 @@ def wrap_model_with_gen(model, args):
         case "cyc":
             return decoding.Recycle(model)
         case _:
-            assert ValueError(args.gen)
+            assert ValueError(args.dec)
 
     return None
 
@@ -52,7 +52,7 @@ def main(args):
         args.model, torch_dtype="auto", device_map="mps", attn_implementation="eager"
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = wrap_model_with_gen(model, args)
+    model = apply_dec(model, args)
 
     response = gen_one(model, tokenizer, args.prompt)
 
@@ -69,12 +69,12 @@ if __name__ == "__main__":
         help="Model name or path",
     )
     parser.add_argument(
-        "-g",
-        "--gen",
+        "-d",
+        "--dec",
         type=str,
         choices=["hf", "ar", "pld", "cyc"],
         default="ar",
-        help="Generate mode",
+        help="Decoding mode",
     )
     parser.add_argument(
         "-p",
