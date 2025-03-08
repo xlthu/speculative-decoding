@@ -6,7 +6,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 def wrap_model_with_gen(model, args):
     match args.gen:
         case "hf":
-            return decoding.Base(model)
+            return decoding.HF(model)
         case "ar":
             return decoding.AutoRegressive(model)
         case "pld":

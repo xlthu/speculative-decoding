@@ -11,57 +11,54 @@ class Recycle(Base):
     def __init__(self, model):
         super().__init__(model)
 
-    @torch.no_grad()
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, **kwargs):
-        n_batch, n_input = input_ids.shape
-        assert n_batch == 1, "batch size must be 1"
-        n_ctx = n_input + max_new_tokens
+    ### Input
 
-        cache = DynamicCache()
-        all_tokens = torch.clone(input_ids)  # [1, n]
-        while True:
-            n_past = cache.get_seq_length()
-            print(f"=== {n_past} ===")
+    def get_input(
+        self, all_tokens: torch.Tensor, cache: DynamicCache
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        n_past = cache.get_seq_length()
 
-            # Draft
-            dtree = self.draft(all_tokens)
+        # Decided
+        dc_tokens = all_tokens[:, n_past:]
+        n_dc = dc_tokens.shape[1]
 
-            # Verify - Forward
-            dc_tokens = all_tokens[:, n_past:]
-            dr_tokens = dtree.tokens(self.device)
-            in_tokens = torch.cat((dc_tokens, dr_tokens), dim=-1)
+        # Drafted
+        dtree = self.draft(all_tokens)
+        dr_tokens = dtree.tokens(self.device)
 
-            attention_mask = self.prepare_attention_mask(n_past, dc_tokens, dtree)
-            position_ids = self.prepare_position_ids(n_past, dc_tokens, dtree)
+        # Input
+        in_tokens = torch.cat((dc_tokens, dr_tokens), dim=-1)
+        attention_mask = self.prepare_attention_mask(n_past, n_dc, dtree)
+        position_ids = self.prepare_position_ids(n_past, n_dc, dtree)
 
-            output = self.model(
-                input_ids=in_tokens,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=cache,
-                return_dict=True,
-            )
+        # Record
+        self.dtree = dtree
 
-            # Verify - Output
-            out_tokens, dr_idx = self.verify(in_tokens, output.logits, dtree)
-            print(f"{out_tokens.shape}")
+        return in_tokens, attention_mask, position_ids
 
-            # Update
-            cache: DynamicCache = output.past_key_values
-            self.update_kv_cache(cache, n_past, dc_tokens, dr_idx)
+    def draft(self, all_tokens: torch.Tensor) -> DraftTree:
+        # return DraftTree().done()
 
-            all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
+        # For test
+        dtree = DraftTree()
 
-            # Stop if finished
-            if self.is_finished(all_tokens, n_ctx, out_tokens):
-                return all_tokens
+        n = [dtree.new_node(i) for i in range(7)]
 
-    def prepare_attention_mask(
-        self, n_past: int, dc_tokens: torch.Tensor, dtree: DraftTree
-    ):
+        dtree.root.add(n[0])
+        n[0].add(n[1])
+
+        # n[1].add(n[2])
+        # n[1].add(n[3])
+
+        # dtree.root.add(n[4])
+        # n[4].add(n[5])
+        # n[5].add(n[6])
+
+        return dtree.done()
+
+    def prepare_attention_mask(self, n_past: int, n_dc: int, dtree: DraftTree):
         # return attention_mask: [1, 1, n_dc + n_dr, n_past + n_dc + n_dr]
         # 0: allow attention, -inf: not allow attention
-        n_dc = dc_tokens.shape[1]
         n_dr = dtree.size()
         min_dtype = torch.finfo(self.dtype).min
 
@@ -87,35 +84,29 @@ class Recycle(Base):
 
         return mask
 
-    def prepare_position_ids(
-        self, n_past: int, dc_tokens: torch.Tensor, dtree: DraftTree
-    ):
-        # return position_ids: [1, n_past + n_dc + n_dr]
-        n_dc = dc_tokens.shape[1]
+    def prepare_position_ids(self, n_past: int, n_dc: int, dtree: DraftTree):
+        # return position_ids: [1, n_dc + n_dr]
         dc_pos = torch.arange(n_past, n_past + n_dc, device=self.device).unsqueeze(0)
         dr_pos = dtree.position_ids(n_past + n_dc, self.device)
         pos = torch.cat((dc_pos, dr_pos), dim=-1)
         return pos
 
-    def draft(self, all_tokens: torch.Tensor) -> DraftTree:
-        # return DraftTree().done()
+    ### Output
 
-        # For test
-        dtree = DraftTree()
+    def obtain_output(
+        self,
+        in_tokens: torch.Tensor,
+        logits: torch.Tensor,
+        cache: DynamicCache,
+    ) -> torch.Tensor:
+        # Verify drafts
+        out_tokens, dr_idx = self.verify(in_tokens, logits, self.dtree)
+        print(f"{out_tokens.shape}")
 
-        n = [dtree.new_node(i) for i in range(7)]
-
-        dtree.root.add(n[0])
-        n[0].add(n[1])
-
-        n[1].add(n[2])
-        n[1].add(n[3])
-
-        dtree.root.add(n[4])
-        n[4].add(n[5])
-        n[5].add(n[6])
-
-        return dtree.done()
+        # Update kv cache
+        n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
+        self.update_kv_cache(cache, n_reserved, dr_idx)
+        return out_tokens
 
     def verify(
         self, in_tokens: torch.Tensor, logits: torch.Tensor, dtree: DraftTree
@@ -128,26 +119,3 @@ class Recycle(Base):
         dr_idx = []
 
         return out_tokens, dr_idx
-
-    def update_kv_cache(
-        self,
-        cache: DynamicCache,
-        n_past: int,
-        dc_tokens: torch.Tensor,
-        dr_idx: list[int],
-    ):
-        n_past += dc_tokens.shape[1]
-        dr_idx = torch.tensor(dr_idx, dtype=torch.long, device=dc_tokens.device)
-
-        def update(tensor: torch.Tensor):
-            return torch.cat(
-                (tensor[..., :n_past, :], tensor.index_select(-2, dr_idx)), dim=-2
-            )
-
-        for lid in range(len(cache.key_cache)):
-            # [batch_size, num_heads, seq_len, head_dim]
-            cache.key_cache[lid] = update(cache.key_cache[lid])
-            cache.value_cache[lid] = update(cache.value_cache[lid])
-
-        n_past += len(dr_idx)
-        cache._seen_tokens = n_past

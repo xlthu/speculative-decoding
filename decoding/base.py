@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from transformers import DynamicCache
 
 __all__ = ["Base"]
 
@@ -19,32 +20,92 @@ class Base(nn.Module):
 
     @torch.no_grad()
     def generate(self, input_ids: torch.Tensor, max_new_tokens: int, **kwargs):
-        attention_mask = torch.ones_like(input_ids)
-        return self.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            # Greedy decoding
-            do_sample=False,
-            top_k=None,
-            top_p=None,
-            temperature=None,
-            repetition_penalty=None,
-        )
+        n_batch, n_input = input_ids.shape
+        assert n_batch == 1, "batch size must be 1"
+        n_ctx = n_input + max_new_tokens
+
+        cache = DynamicCache()
+        all_tokens = torch.clone(input_ids)  # [1, n]
+        while True:
+            n_past = cache.get_seq_length()
+            print(f"=== {n_past} ===")
+
+            # Input
+            in_tokens, attention_mask, position_ids = self.get_input(all_tokens, cache)
+
+            # Forward
+            output = self.model(
+                input_ids=in_tokens,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=cache,
+                return_dict=True,
+            )
+
+            # Output
+            cache = output.past_key_values
+            out_tokens = self.obtain_output(in_tokens, output.logits, cache)
+
+            all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
+
+            # Stop if finished
+            if self.is_finished(all_tokens, n_ctx, out_tokens):
+                return all_tokens
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)
 
+    # Hook
+
+    def get_input(
+        self, all_tokens: torch.Tensor, cache: DynamicCache
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Get input and
+
+        Args:
+            all_tokens (torch.Tensor): [1, n_past + n_input]
+                All tokens including past evaluted and currently inputted tokens
+            cache (DynamicCache): KV cache of all evaluted tokens
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                in_tokens: [1, n_in = n_dc + n_dr]
+                attention_mask: [1, 1, n_in, n_past + n_in]
+                position_ids: [1, n_in]
+        """
+        raise NotImplementedError()
+
+    def obtain_output(
+        self,
+        in_tokens: torch.Tensor,
+        logits: torch.Tensor,
+        cache: DynamicCache,
+    ) -> torch.Tensor:
+        """Get output from logits and update kv cache
+
+        Args:
+            n_past (int): #Tokens
+            in_tokens (torch.Tensor): [1, n_in], Tokens evaluated
+            logits (torch.Tensor): [1, n_in, n_vocab], Logits from evaluating `in_tokens`
+            cache (DynamicCache): KV cache after evaluating `in_tokens`
+
+        Returns:
+            out_tokens: [1, n_out]
+        """
+        raise NotImplementedError()
+
     # Utility
 
-    def get_eos_token_ids(self):
+    def get_eos_token_ids(self) -> list[int]:
+        """Get all eos tokens"""
         eos_token_ids = self.model.generation_config.eos_token_id
         if isinstance(eos_token_ids, int):
             eos_token_ids = [eos_token_ids]
 
         return eos_token_ids
 
-    def is_eos(self, token: int):
+    def is_eos(self, token: int) -> bool:
+        """Check if token is eos token"""
         return token in self.get_eos_token_ids()
 
     def is_finished(
@@ -66,3 +127,34 @@ class Base(nn.Module):
                 return True
 
         return False
+
+    def update_kv_cache(
+        self, cache: DynamicCache, n_reserved: int, picked: list[int] = None
+    ):
+        """Update KV Cache after evaluation
+
+            First, reserve `n_reserved` lines from the beginning of `cache`.
+            Then, pick the lines indexed by `picked` and append them to `cache`.
+
+        Args:
+            cache (DynamicCache): KV Cache after evaluated
+            n_reserved (int): #Reserved lines from the beginning
+            picked (list[int]): Indecics of lines to pick after the reserved lines
+        """
+        if not picked:
+            cache.crop(n_reserved)
+            return
+
+        picked = torch.tensor(picked, dtype=torch.long, device=self.device)
+
+        def update(tensor: torch.Tensor):
+            return torch.cat(
+                (tensor[..., :n_reserved, :], tensor.index_select(-2, picked)), dim=-2
+            )
+
+        for lid in range(len(cache.key_cache)):
+            # [batch_size, num_heads, seq_len, head_dim]
+            cache.key_cache[lid] = update(cache.key_cache[lid])
+            cache.value_cache[lid] = update(cache.value_cache[lid])
+
+        cache._seen_tokens = n_reserved + len(picked)

@@ -7,44 +7,21 @@ __all__ = ["AutoRegressive"]
 
 
 class AutoRegressive(Base):
-    @torch.no_grad()
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, **kwargs):
-        n_batch, n_input = input_ids.shape
-        assert n_batch == 1, "batch size must be 1"
-        n_ctx = n_input + max_new_tokens
 
-        cache = DynamicCache()
-        all_tokens = torch.clone(input_ids)  # [1, n_past + n_token]
-        while True:
-            n_past = cache.get_seq_length()
-            print(f"=== {n_past} ===")
+    ### Input
 
-            # Input
-            in_tokens = all_tokens[:, n_past:]
-            n_token = in_tokens.shape[1]  # [1, n_token]
-            attention_mask = self.prepare_attention_mask(n_past, n_token)
-            position_ids = self.prepare_position_ids(n_past, n_token)
+    def get_input(
+        self, all_tokens: torch.Tensor, cache: DynamicCache
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        n_past = cache.get_seq_length()
 
-            # Forward
-            output = self.model(
-                input_ids=in_tokens,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=cache,
-                return_dict=True,
-                logits_to_keep=1,
-            )
+        in_tokens = all_tokens[:, n_past:]
+        n_token = in_tokens.shape[1]  # [1, n_token]
 
-            # Output
-            out_tokens = torch.argmax(output.logits, dim=-1)  # [1, 1]
-            all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
+        attention_mask = self.prepare_attention_mask(n_past, n_token)
+        position_ids = self.prepare_position_ids(n_past, n_token)
 
-            # Update
-            cache: DynamicCache = output.past_key_values
-            cache.crop(all_tokens.shape[1] - 1)
-
-            if self.is_finished(all_tokens, n_ctx, out_tokens):
-                return all_tokens
+        return in_tokens, attention_mask, position_ids
 
     def prepare_attention_mask(self, n_past: int, n_token: int):
         # return attention_mask: [1, 1, n_token, n_past + n_token]
@@ -63,6 +40,15 @@ class AutoRegressive(Base):
 
     def prepare_position_ids(self, n_past: int, n_token: int):
         # return position_ids: [1, n_token]
-        pos = torch.arange(n_past, n_token + n_past, device=self.device)
-        pos.unsqueeze_(0)
-        return pos
+        return torch.arange(n_past, n_token + n_past, device=self.device).unsqueeze(0)
+
+    ### Output
+
+    def obtain_output(
+        self,
+        in_tokens: torch.Tensor,
+        logits: torch.Tensor,
+        cache: DynamicCache,
+    ) -> torch.Tensor:
+        # No need to update cache
+        return torch.argmax(logits[:, -1:], dim=-1)  # [1, 1]
