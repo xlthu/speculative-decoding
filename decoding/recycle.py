@@ -1,49 +1,10 @@
-from typing import Callable
 import torch
 from transformers import DynamicCache
 
 from .base import Base
+from .dtree import *
 
 __all__ = ["Recycle"]
-
-
-class Node:
-    def __init__(self, token: int):
-        self.token: int = token
-        self.idx: int = 0
-        self.pos: int = 0
-        self.children: list[Node] = []
-
-
-class DraftTree:
-    def __init__(self):
-        self.root = Node(-1)  # Special root node
-        self._tokens: list[int] = []
-
-    def new_node(self, token: int):
-        return Node(token)
-
-    def done(self):
-        pass
-
-    def size(self):
-        return len(self._tokens)
-
-    def position_ids(self, start: int, device) -> torch.Tensor:
-        pass
-
-    def tokens(self, device) -> torch.Tensor:
-        return torch.tensor(self._tokens, dtype=torch.long, device=device)
-
-    @staticmethod
-    def do_bfs(visit: Callable[[Node, Node], None], cur: Node, parent: Node = None):
-        visit(cur, parent)
-
-        for child in cur.children:
-            DraftTree.do_bfs(visit, child, cur)
-
-    def bfs(self, visit: Callable[[Node, Node], None]):
-        self.do_bfs(visit, self.root)
 
 
 class Recycle(Base):
@@ -82,17 +43,14 @@ class Recycle(Base):
             )
 
             # Verify - Output
-            out_tokens = self.verify(in_tokens, output.logits, dtree)
+            out_tokens, dr_idx = self.verify(in_tokens, output.logits, dtree)
             print(f"{out_tokens.shape}")
 
-            # Update - Policy
-            self.update(in_tokens, output.logits, dtree)
-
-            # Update - all_tokens & kv cache
-            all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
-
+            # Update
             cache: DynamicCache = output.past_key_values
-            cache.crop(all_tokens.shape[1] - 1)
+            self.update_kv_cache(cache, n_past, dc_tokens, dr_idx)
+
+            all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
 
             # Stop if finished
             if self.is_finished(all_tokens, n_ctx, out_tokens):
@@ -101,17 +59,30 @@ class Recycle(Base):
     def prepare_attention_mask(
         self, n_past: int, dc_tokens: torch.Tensor, dtree: DraftTree
     ):
-        # return attention_mask: [1, 1, n_token, n_past + n_token]
+        # return attention_mask: [1, 1, n_dc + n_dr, n_past + n_dc + n_dr]
         # 0: allow attention, -inf: not allow attention
         n_dc = dc_tokens.shape[1]
+        n_dr = dtree.size()
         min_dtype = torch.finfo(self.dtype).min
-        mask = torch.full(
-            (n_dc, n_past + n_dc),
+
+        lmask = torch.full(
+            size=(n_dc + n_dr, n_past + n_dc),
             fill_value=min_dtype,
             dtype=self.dtype,
             device=self.device,
         )
-        mask = torch.triu(mask, diagonal=n_past + 1)
+        lmask = torch.triu(lmask, diagonal=n_past + 1)
+
+        rmask = torch.full(
+            size=(n_dc + n_dr, n_dr),
+            fill_value=min_dtype,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        dr_mask = rmask[n_dc:, :]
+        dtree.zero_mask(dr_mask)
+
+        mask = torch.cat((lmask, rmask), dim=-1)
         mask = mask.reshape(1, 1, *mask.shape)
 
         return mask
@@ -119,19 +90,64 @@ class Recycle(Base):
     def prepare_position_ids(
         self, n_past: int, dc_tokens: torch.Tensor, dtree: DraftTree
     ):
-        # return position_ids: [1, n_token]
+        # return position_ids: [1, n_past + n_dc + n_dr]
         n_dc = dc_tokens.shape[1]
-        pos = torch.arange(n_past, n_dc + n_past, device=self.device)
-        pos.unsqueeze_(0)
+        dc_pos = torch.arange(n_past, n_past + n_dc, device=self.device).unsqueeze(0)
+        dr_pos = dtree.position_ids(n_past + n_dc, self.device)
+        pos = torch.cat((dc_pos, dr_pos), dim=-1)
         return pos
 
     def draft(self, all_tokens: torch.Tensor) -> DraftTree:
-        return DraftTree()
+        # return DraftTree().done()
+
+        # For test
+        dtree = DraftTree()
+
+        n = [dtree.new_node(i) for i in range(7)]
+
+        dtree.root.add(n[0])
+        n[0].add(n[1])
+
+        n[1].add(n[2])
+        n[1].add(n[3])
+
+        dtree.root.add(n[4])
+        n[4].add(n[5])
+        n[5].add(n[6])
+
+        return dtree.done()
 
     def verify(
         self, in_tokens: torch.Tensor, logits: torch.Tensor, dtree: DraftTree
-    ) -> torch.Tensor:
-        return torch.argmax(logits[:, -1:, :], dim=-1)  # [1, 1]
+    ) -> tuple[torch.Tensor, list[int]]:
+        # AR, for test
+        n_dr = dtree.size()
+        out_tokens = torch.argmax(
+            logits[:, -n_dr - 1 : -n_dr or None, :], dim=-1
+        )  # [1, 1]
+        dr_idx = []
 
-    def update(self, in_tokens: torch.Tensor, logits: torch.Tensor, dtree: DraftTree):
-        pass
+        return out_tokens, dr_idx
+
+    def update_kv_cache(
+        self,
+        cache: DynamicCache,
+        n_past: int,
+        dc_tokens: torch.Tensor,
+        dr_idx: list[int],
+    ):
+        n_past += dc_tokens.shape[1]
+        dr_idx = torch.tensor(dr_idx, dtype=torch.long, device=dc_tokens.device)
+
+        def update(tensor: torch.Tensor):
+            return torch.cat(
+                (tensor[..., :n_past, :], tensor.index_select(-2, dr_idx)), dim=-2
+            )
+
+        for lid in range(len(cache.key_cache)):
+            # [batch_size, num_heads, seq_len, head_dim]
+            cache.key_cache[lid] = update(cache.key_cache[lid])
+            cache.value_cache[lid] = update(cache.value_cache[lid])
+
+        n_past += len(dr_idx)
+        cache._seen_tokens = n_past
