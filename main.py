@@ -11,6 +11,8 @@ def wrap_model_with_gen(model, args):
             return decoding.AutoRegressive(model)
         case "pld":
             return decoding.PLD(model)
+        case "cyc":
+            return decoding.Recycle(model)
         case _:
             assert ValueError(args.gen)
 
