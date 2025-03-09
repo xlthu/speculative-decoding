@@ -38,20 +38,19 @@ class DraftTree:
         idx = 0
 
         def visit(cur: Node, parent: Node):
-            if parent is None:
-                return  # use default values for root
+            if parent is not None:  # use default values for root
+                # token
+                self._tokens.append(cur.token)
 
-            # token
-            self._tokens.append(cur.token)
+                # idx
+                nonlocal idx
+                cur.idx = idx
+                idx += 1
 
-            # idx
-            nonlocal idx
-            cur.idx = idx
-            idx += 1
-
-            # pos
-            cur.pos = parent.pos + 1
-            self._pos.append(cur.pos)
+                # pos
+                cur.pos = parent.pos + 1
+                self._pos.append(cur.pos)
+            return True
 
         self.dfs(visit)
 
@@ -83,6 +82,7 @@ class DraftTree:
 
                 for p in parents:
                     mask[cur.idx, p.idx] = 0.0
+            return True
 
         def post_visit(cur: Node, parent: Node):
             if parent is not None:
@@ -91,14 +91,44 @@ class DraftTree:
 
         self.dfs(visit, post_visit)
 
+    def longest_acc_chain(self, acc_flag: list[bool]) -> list[Node]:
+        longest_chain = []
+        cur_chain = []
+
+        def visit(cur: Node, parent: Node):
+            if parent is not None:
+                nonlocal cur_chain, longest_chain
+
+                if not acc_flag[cur.idx]:
+                    # Not visit the sub tree if not accepted
+                    return False
+
+                cur_chain.append(cur)
+                longest_chain = (
+                    longest_chain
+                    if len(longest_chain) >= len(cur_chain)
+                    else cur_chain.copy()
+                )
+            return True
+
+        def post_visit(cur: Node, parent: Node):
+            if parent is not None:
+                nonlocal cur_chain
+                cur_chain.pop()
+
+        self.dfs(visit, post_visit)
+
+        return longest_chain
+
     @staticmethod
     def do_dfs(
-        visit: Callable[[Node, Node], None],
+        visit: Callable[[Node, Node], bool],
         post_visit: Callable[[Node, Node], None],
         cur: Node,
         parent: Node = None,
     ):
-        visit(cur, parent)
+        if not visit(cur, parent):
+            return
 
         for child in cur.children:
             DraftTree.do_dfs(visit, post_visit, child, cur)
@@ -107,7 +137,7 @@ class DraftTree:
 
     def dfs(
         self,
-        visit: Callable[[Node, Node], None],
+        visit: Callable[[Node, Node], bool],
         post_visit: Callable[[Node, Node], None] = lambda cur, parent: None,
     ):
         self.do_dfs(visit, post_visit, self.root)
@@ -119,6 +149,7 @@ class DraftTree:
             nonlocal indent
             print(" " * indent, cur)
             indent += 4
+            return True
 
         def post_visit(cur: Node, parent: Node):
             nonlocal indent

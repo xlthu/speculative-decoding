@@ -88,7 +88,7 @@ class PLD(Base):
     ) -> torch.Tensor:
         # Output
         n_dr = self.dchain.shape[1]
-        out_tokens = torch.argmax(logits[:, -n_dr - 1 :], dim=-1)  # [1, 1 + n_dr]
+        out_tokens = torch.argmax(logits[:, -n_dr - 1 :, :], dim=-1)  # [1, 1 + n_dr]
 
         # Verify
         acc_len = 1  # Accept AR output

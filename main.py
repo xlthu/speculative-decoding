@@ -49,7 +49,7 @@ def gen_one(
 
 def main(args):
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype="auto", device_map="mps", attn_implementation="eager"
+        args.model, torch_dtype="auto", device_map="cpu"
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = apply_dec(model, args)

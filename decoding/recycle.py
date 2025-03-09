@@ -45,17 +45,15 @@ class Recycle(Base):
         # For test
         dtree = DraftTree()
 
-        n = [dtree.new_node(i) for i in range(7)]
+        tokens = [95456, 0, 362, 3460, 4128, 1614, 374, 264, 943]
+        tokens = [95456, 0, 362, 3460, 4128, 1614]
+        tokens = [95456, 1, 2, 3, 4, 5, 6, 7]
 
-        dtree.root.add(n[0])
-        n[0].add(n[1])
-
-        # n[1].add(n[2])
-        # n[1].add(n[3])
-
-        # dtree.root.add(n[4])
-        # n[4].add(n[5])
-        # n[5].add(n[6])
+        p = dtree.root
+        for t in tokens:
+            n = dtree.new_node(t)
+            p.add(n)
+            p = n
 
         return dtree.done()
 
@@ -67,23 +65,39 @@ class Recycle(Base):
         logits: torch.Tensor,
         cache: DynamicCache,
     ) -> torch.Tensor:
-        # Verify drafts
+        # Get output
         out_tokens, dr_idx = self.verify(in_tokens, logits, self.dtree)
         print(f"{out_tokens.shape}")
 
         # Update kv cache
         n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
+        dr_idx = [n_reserved + i for i in dr_idx]
         self.update_kv_cache(cache, n_reserved, dr_idx)
         return out_tokens
 
     def verify(
         self, in_tokens: torch.Tensor, logits: torch.Tensor, dtree: DraftTree
     ) -> tuple[torch.Tensor, list[int]]:
-        # AR, for test
         n_dr = dtree.size()
-        out_tokens = torch.argmax(
-            logits[:, -n_dr - 1 : -n_dr or None, :], dim=-1
-        )  # [1, 1]
-        dr_idx = []
+
+        # Greedy decoding
+        out_tokens = torch.argmax(logits[0, -n_dr - 1 :], dim=-1)  # [1 + n_dr]
+
+        if n_dr == 0:
+            return out_tokens.unsqueeze(0), []
+
+        # Verify draft
+        eq = in_tokens[0, -n_dr:] == out_tokens[:-1]  # [n_dr]
+        longest_acc_chain = dtree.longest_acc_chain(eq.tolist())
+
+        # Output
+        dr_idx = [n.idx for n in longest_acc_chain]
+        out_tokens = [out_tokens[0].item()] + [
+            out_tokens[n.idx + 1].item() for n in longest_acc_chain
+        ]
+
+        out_tokens = torch.tensor(
+            out_tokens, dtype=torch.long, device=self.device
+        ).unsqueeze(0)
 
         return out_tokens, dr_idx
