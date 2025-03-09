@@ -2,15 +2,17 @@ import torch
 from transformers import DynamicCache
 
 from .base import Base
-from .dtree import DraftTree
+from .dtree import *
 from .utils import tree_attention_mask, tree_position_ids
 
 __all__ = ["Recycle"]
 
 
 class Recycle(Base):
-    def __init__(self, model):
+    def __init__(self, model, n_vocab: int, k: int = 8):
         super().__init__(model)
+        self.adj_mat = [[-1] * k for _ in range(n_vocab)]
+        self.k = k
 
     ### Input
 
@@ -40,22 +42,61 @@ class Recycle(Base):
         return in_tokens, attention_mask, position_ids
 
     def draft(self, all_tokens: torch.Tensor) -> DraftTree:
-        # return DraftTree().done()
+        # Chain
+        # layers = [
+        #     [1],
+        #     [1],
+        #     [1],
+        #     [1],
+        #     [1],
+        # ]
 
-        # For test
+        # Eagle-1 tree
+        layers = [
+            [4],
+            [3, 2, 2, 1],
+            [3, 2, 2, 1, 0, 0, 0, 0],
+            [3, 0, 0, 0, 0, 0, 0, 0],
+            [2, 0, 0],
+        ]
+
+        # Token Recycling Tree
+        # layers = [
+        #     [8],
+        #     [8, 4, 3, 2, 1, 1, 1, 1],
+        #     [8, 3, 2, 1, 1, 1, 1, 1, 2, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0],
+        #     [5, 2, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0],
+        #     [3, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0],
+        #     [2, 0, 0, 1, 0, 0, 0, 0],
+        # ]
+
         dtree = DraftTree()
+        dtree.root.token = all_tokens[0, -1].item()
 
-        tokens = [95456, 0, 362, 3460, 4128, 1614, 374, 264, 943]
-        tokens = [95456, 0, 362, 3460, 4128, 1614]
-        tokens = [95456, 1, 2, 3, 4, 5, 6, 7]
+        # Fill according to static tree
+        cur_layer = [dtree.root]
+        for depth, layer in enumerate(layers):
+            # fmt: off
+            assert len(layer) == len(cur_layer), f"{depth}: {len(layer)} != {len(cur_layer)}"
+            # fmt: on
 
-        p = dtree.root
-        for t in tokens:
-            n = dtree.new_node(t)
-            p.add(n)
-            p = n
+            new_layer = []
+            for nchild, parent in zip(layer, cur_layer):
+                parent.children = [Node(t) for t in self.adj_mat[parent.token][:nchild]]
+                new_layer.extend(parent.children)
+            cur_layer = new_layer
 
-        return dtree.done()
+        # Remove -1 token
+        def remove_invalid_token(cur: Node, parent: Node):
+            cur.children = [c for c in cur.children if c.token != -1]
+            return True
+
+        dtree.dfs(remove_invalid_token)
+        dtree.done()
+
+        print(f"n_dr = {dtree.size()}")
+
+        return dtree
 
     ### Output
 
@@ -73,6 +114,9 @@ class Recycle(Base):
         n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
         dr_idx = [n_reserved + i for i in dr_idx]
         self.update_kv_cache(cache, n_reserved, dr_idx)
+
+        # Update adjacency matrix
+        self.update_adj_mat(in_tokens, logits)
         return out_tokens
 
     def verify(
@@ -82,6 +126,8 @@ class Recycle(Base):
 
         # Greedy decoding
         out_tokens = torch.argmax(logits[0, -n_dr - 1 :], dim=-1)  # [1 + n_dr]
+
+        # return out_tokens[0].unsqueeze(0).unsqueeze(0), []
 
         if n_dr == 0:
             return out_tokens.unsqueeze(0), []
@@ -95,9 +141,17 @@ class Recycle(Base):
         out_tokens = [out_tokens[0].item()] + [
             out_tokens[n.idx + 1].item() for n in longest_acc_chain
         ]
+        print(f"acc_len = {len(out_tokens)}")
 
         out_tokens = torch.tensor(
             out_tokens, dtype=torch.long, device=self.device
         ).unsqueeze(0)
 
         return out_tokens, dr_idx
+
+    def update_adj_mat(self, in_tokens: torch.Tensor, logits: torch.Tensor):
+        _, indices = torch.topk(logits[0], self.k)
+        indices = indices.tolist()
+
+        for token, idx in zip(in_tokens[0].tolist(), indices):
+            self.adj_mat[token] = idx

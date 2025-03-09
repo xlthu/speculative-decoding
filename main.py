@@ -12,7 +12,7 @@ def apply_dec(model, args):
         case "pld":
             return decoding.PLD(model)
         case "cyc":
-            return decoding.Recycle(model)
+            return decoding.Recycle(model, model.config.vocab_size)
         case _:
             assert ValueError(args.dec)
 
@@ -49,7 +49,7 @@ def gen_one(
 
 def main(args):
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype="auto", device_map="cpu"
+        args.model, torch_dtype="auto", device_map="mps"
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = apply_dec(model, args)
