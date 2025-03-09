@@ -7,8 +7,8 @@ __all__ = ["Node", "DraftTree"]
 class Node:
     def __init__(self, token: int):
         self.token: int = token
-        self.idx: int = -1
-        self.pos: int = -1
+        self.idx: int = -1  # Index in the flatten represetation
+        self.pos: int = -1  # Real position in the text / Tree depth
         self.children: list[Node] = []
 
     def add(self, child: "Node"):
@@ -26,15 +26,23 @@ class Node:
 
 
 class DraftTree:
+    """Draft Tree
+
+    1. Root is a special node, does not represent any token.
+    2. Flatten representation is obtained by DFS.
+    """
+
     def __init__(self):
         self.root = Node(-1)  # Special root node
-        self._tokens: list[int] = []
-        self._pos: list[int] = []
+        self._tokens: list[int] = []  # Flatten tokens
+        self._pos: list[int] = []  # Flatten tositions
 
     def new_node(self, token: int) -> Node:
+        """Use this to create node (for C++, recycle the memory)"""
         return Node(token)
 
     def done(self) -> "DraftTree":
+        """Called when all nodes are added"""
         idx = 0
 
         def visit(cur: Node, parent: Node):
@@ -57,19 +65,27 @@ class DraftTree:
         return self
 
     def size(self) -> int:
+        """#draft tokens"""
         return len(self._tokens)
 
     def position_ids(self, start: int, device) -> torch.Tensor:
+        """Flatten positions"""
         # [1, size]
         return (
             torch.tensor(self._pos, dtype=torch.long, device=device) + start
         ).unsqueeze(0)
 
     def tokens(self, device) -> torch.Tensor:
+        """Flatten tokens"""
         # [1, size]
         return torch.tensor(self._tokens, dtype=torch.long, device=device).unsqueeze(0)
 
     def zero_mask(self, mask: torch.Tensor):
+        """Zeroing the attention position in the mask, in place
+
+        Args:
+            mask (torch.Tensor): `-inf` tensor of [size, size]
+        """
         # mask: [size, size]
         assert mask.shape == (self.size(), self.size())
 
@@ -92,6 +108,15 @@ class DraftTree:
         self.dfs(visit, post_visit)
 
     def longest_acc_chain(self, acc_flag: list[bool]) -> list[Node]:
+        """Get the longest accepted node chain
+
+        Args:
+            acc_flag (list[bool]): Whether the node is accepted or not
+                in the flatten representation
+
+        Returns:
+            list[Node]: The longest accepted node chain
+        """
         longest_chain = []
         cur_chain = []
 
@@ -140,9 +165,25 @@ class DraftTree:
         visit: Callable[[Node, Node], bool],
         post_visit: Callable[[Node, Node], None] = lambda cur, parent: None,
     ):
+        """DFS
+
+        Args:
+            visit (Callable[[Node, Node], bool]):
+                Called when first visit a node
+                    Args: the node to be visited, parent of the node
+                    Returns: to visit the sub tree of the node or not
+            post_visit (Callable[[Node, Node], None], optional):
+                Called after all the nodes in the sub-tree are visited
+                    Args: the node whose sub-tree is visited, parent of the node
+                    Retuns: ignored
+
+        Notes:
+            If `visit` return False, then `post_visit` will not called on this node
+        """
         self.do_dfs(visit, post_visit, self.root)
 
     def debug(self):
+        """Print a tree representation"""
         indent = 0
 
         def visit(cur: Node, parent: Node):
