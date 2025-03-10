@@ -40,12 +40,19 @@ def tree_attention_mask(n_past: int, n_dc: int, dtree: DraftTree, dtype, device)
     min_dtype = torch.finfo(dtype).min
 
     lmask = torch.full(
-        size=(n_dc + n_dr, n_past + n_dc),
+        size=(n_dc + n_dr, n_past),
+        fill_value=0.0,
+        dtype=dtype,
+        device=device,
+    )
+
+    mmask = torch.full(
+        size=(n_dc + n_dr, n_dc),
         fill_value=min_dtype,
         dtype=dtype,
         device=device,
     )
-    lmask = torch.triu(lmask, diagonal=n_past + 1)
+    mmask = torch.triu(mmask, diagonal=1)
 
     rmask = torch.full(
         size=(n_dc + n_dr, n_dr),
@@ -56,7 +63,7 @@ def tree_attention_mask(n_past: int, n_dc: int, dtree: DraftTree, dtype, device)
     dr_mask = rmask[n_dc:, :]
     dtree.zero_mask(dr_mask)
 
-    mask = torch.cat((lmask, rmask), dim=-1)
+    mask = torch.cat((lmask, mmask, rmask), dim=-1)
     mask = mask.reshape(1, 1, *mask.shape)
 
     return mask
