@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from transformers import DynamicCache
 
+from .stat import Stat
+
 __all__ = ["Base"]
 
 
@@ -19,38 +21,53 @@ class Base(nn.Module):
         return self.model.config.torch_dtype
 
     @torch.no_grad()
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, **kwargs):
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        *,
+        cache: DynamicCache = None,
+        stat: Stat = None,
+    ):
         n_batch, n_input = input_ids.shape
         assert n_batch == 1, "batch size must be 1"
         n_ctx = n_input + max_new_tokens
 
-        cache = DynamicCache()
+        cache = cache or DynamicCache()
+        stat = stat or Stat()
         all_tokens = torch.clone(input_ids)  # [1, n]
+
         while True:
-            n_past = cache.get_seq_length()
-            print(f"=== {n_past} ===")
+            # n_past = cache.get_seq_length()
+            # print(f"=== {n_past} ===")
 
             # Input
-            in_tokens, attention_mask, position_ids = self.get_input(all_tokens, cache)
+            with stat.tik_tok("get_input"):
+                in_tokens, attention_mask, position_ids = self.get_input(
+                    all_tokens, cache
+                )
 
             # Forward
-            output = self.model(
-                input_ids=in_tokens,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=cache,
-                return_dict=True,
-            )
+            with stat.tik_tok("forward"):
+                output = self.model(
+                    input_ids=in_tokens,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=cache,
+                    return_dict=True,
+                )
 
             # Output
             cache = output.past_key_values
-            out_tokens = self.obtain_output(in_tokens, output.logits, cache)
+            with stat.tik_tok("obtain_output"):
+                out_tokens = self.obtain_output(in_tokens, output.logits, cache)
+            stat.put("acc_len", out_tokens.shape[1])
 
             all_tokens = torch.cat((all_tokens, out_tokens), dim=-1)
 
             # Stop if finished
             if self.is_finished(all_tokens, n_ctx, out_tokens):
-                return all_tokens
+                return {"output_ids": all_tokens, "stat": stat, "cache": cache}
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)

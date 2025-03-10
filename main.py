@@ -2,21 +2,7 @@ import argparse
 import decoding
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer
 
-
-def apply_dec(model, args):
-    match args.dec:
-        case "hf":
-            return decoding.HF(model)
-        case "ar":
-            return decoding.AutoRegressive(model)
-        case "pld":
-            return decoding.PLD(model)
-        case "cyc":
-            return decoding.Recycle(model, model.config.vocab_size)
-        case _:
-            assert ValueError(args.dec)
-
-    return None
+from utils import *
 
 
 def gen_one(
@@ -34,14 +20,18 @@ def gen_one(
     text = tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    input_ids = tokenizer([text], return_tensors="pt").input_ids.to(model.device)
 
-    generated_ids = model.generate(**model_inputs, max_new_tokens=128)
+    output = model.generate(input_ids, max_new_tokens=args.max_new_tokens)
+
+    generated_ids = output["output_ids"]
     generated_ids = [
         output_ids[len(input_ids) :]
-        for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+        for input_ids, output_ids in zip(input_ids, generated_ids)
     ]
-    print(generated_ids)
+    print(f"{generated_ids=}")
+    print(f"{output['stat']=}")
+
     response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
 
     return response
@@ -49,10 +39,13 @@ def gen_one(
 
 def main(args):
     model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype="auto", device_map="mps"
+        args.model,
+        torch_dtype="auto",
+        device_map=args.device,
+        attn_implementation="eager",
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = apply_dec(model, args)
+    model = apply_dec(model, args.decode)
 
     response = gen_one(model, tokenizer, args.prompt)
 
@@ -70,12 +63,17 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-d",
-        "--dec",
+        "--decode",
         type=str,
         choices=["hf", "ar", "pld", "cyc"],
         default="ar",
         help="Decoding mode",
     )
+    parser.add_argument(
+        "--max-new-tokens", type=str, default=1024, help="Max new tokens"
+    )
+    parser.add_argument("--device", type=str, default="cuda:0", help="Device")
+
     parser.add_argument(
         "-p",
         "--prompt",

@@ -2,3 +2,4 @@
 poetry.lock
 models/
 __pycache__/
+output/

@@ -97,7 +97,6 @@ class PLD(Base):
             acc_len += neq.int().argmax(-1).item()
 
         out_tokens = out_tokens[:, :acc_len]  # [1, acc_len]
-        print(f"{acc_len=}")
 
         # Update
         if n_dr:

@@ -92,11 +92,8 @@ class Recycle(Base):
             return True
 
         dtree.dfs(remove_invalid_token)
-        dtree.done()
 
-        print(f"n_dr = {dtree.size()}")
-
-        return dtree
+        return dtree.done()
 
     ### Output
 
@@ -134,7 +131,6 @@ class Recycle(Base):
         out_tokens = [out_tokens[0]] + [
             out_tokens[n.idx + 1] for n in longest_acc_chain
         ]
-        print(f"acc_len = {len(out_tokens)} {out_tokens}")
 
         out_tokens = torch.tensor(
             out_tokens, dtype=torch.long, device=self.device
