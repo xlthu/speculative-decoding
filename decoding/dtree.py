@@ -107,16 +107,17 @@ class DraftTree:
 
         self.dfs(visit, post_visit)
 
-    def longest_acc_chain(self, acc_flag: list[bool]) -> list[Node]:
+    def longest_acc_chain(self, out_tokens: list[int]) -> list[Node]:
         """Get the longest accepted node chain
 
         Args:
-            acc_flag (list[bool]): Whether the node is accepted or not
-                in the flatten representation
+            out_tokens (list[int]): Output tokens correspnding to [root, self.tokens...]
 
         Returns:
             list[Node]: The longest accepted node chain
         """
+        assert len(out_tokens) == len(self._tokens) + 1
+
         longest_chain = []
         cur_chain = []
 
@@ -124,7 +125,7 @@ class DraftTree:
             if parent is not None:
                 nonlocal cur_chain, longest_chain
 
-                if not acc_flag[cur.idx]:
+                if cur.token != out_tokens[parent.idx + 1]:
                     # Not visit the sub tree if not accepted
                     return False
 

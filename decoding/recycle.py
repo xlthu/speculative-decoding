@@ -108,7 +108,6 @@ class Recycle(Base):
     ) -> torch.Tensor:
         # Get output
         out_tokens, dr_idx = self.verify(in_tokens, logits, self.dtree)
-        print(f"{out_tokens.shape}")
 
         # Update kv cache
         n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
@@ -125,23 +124,17 @@ class Recycle(Base):
         n_dr = dtree.size()
 
         # Greedy decoding
-        out_tokens = torch.argmax(logits[0, -n_dr - 1 :], dim=-1)  # [1 + n_dr]
-
-        # return out_tokens[0].unsqueeze(0).unsqueeze(0), []
-
-        if n_dr == 0:
-            return out_tokens.unsqueeze(0), []
+        out_tokens = torch.argmax(logits[0, -n_dr - 1 :], dim=-1).tolist()  # [1 + n_dr]
 
         # Verify draft
-        eq = in_tokens[0, -n_dr:] == out_tokens[:-1]  # [n_dr]
-        longest_acc_chain = dtree.longest_acc_chain(eq.tolist())
+        longest_acc_chain = dtree.longest_acc_chain(out_tokens)
 
         # Output
         dr_idx = [n.idx for n in longest_acc_chain]
-        out_tokens = [out_tokens[0].item()] + [
-            out_tokens[n.idx + 1].item() for n in longest_acc_chain
+        out_tokens = [out_tokens[0]] + [
+            out_tokens[n.idx + 1] for n in longest_acc_chain
         ]
-        print(f"acc_len = {len(out_tokens)}")
+        print(f"acc_len = {len(out_tokens)} {out_tokens}")
 
         out_tokens = torch.tensor(
             out_tokens, dtype=torch.long, device=self.device
