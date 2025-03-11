@@ -1,7 +1,10 @@
 from typing import Callable
 import torch
+from dataclasses import dataclass
+import random
+import numpy as np
 
-__all__ = ["Node", "DraftTree"]
+__all__ = ["Node", "VerifiedToken", "DraftTree"]
 
 
 class Node:
@@ -25,6 +28,12 @@ class Node:
         )
 
 
+@dataclass
+class VerifiedToken:
+    token: int
+    idx: int
+
+
 class DraftTree:
     """Draft Tree
 
@@ -32,8 +41,8 @@ class DraftTree:
     2. Flatten representation is obtained by DFS.
     """
 
-    def __init__(self):
-        self.root = Node(-1)  # Special root node
+    def __init__(self, root_token: int = -1):
+        self.root = Node(root_token)
         self._tokens: list[int] = []  # Flatten tokens
         self._pos: list[int] = []  # Flatten tositions
 
@@ -84,7 +93,7 @@ class DraftTree:
         """Zeroing the attention position in the mask, in place
 
         Args:
-            mask (torch.Tensor): `-inf` tensor of [size, size]
+            mask (torch.Tensor): `-inf` tensor of [size(), size()]
         """
         # mask: [size, size]
         assert mask.shape == (self.size(), self.size())
@@ -107,44 +116,83 @@ class DraftTree:
 
         self.dfs(visit, post_visit)
 
-    def longest_acc_chain(self, out_tokens: list[int]) -> list[Node]:
-        """Get the longest accepted node chain
+    def longest_acc_chain_gd(self, logits: torch.Tensor) -> list[VerifiedToken]:
+        """Longest accepted chain using greedy decoding
 
         Args:
-            out_tokens (list[int]): Output tokens correspnding to [root, self.tokens...]
+            logits (torch.Tensor): [1, ..., n_vocab]
+                logits from original model
 
         Returns:
-            list[Node]: The longest accepted node chain
+            list[VerifiedToken]: [1, 1 + size()]
         """
-        assert len(out_tokens) == len(self._tokens) + 1
+        assert logits.shape[1] >= self.size() + 1
 
-        longest_chain = []
-        cur_chain = []
+        logits = logits[0, -self.size() - 1 :]
+        out_tokens = torch.argmax(logits, dim=-1).tolist()  # [1 + size]
 
-        def visit(cur: Node, parent: Node):
-            if parent is not None:
-                nonlocal cur_chain, longest_chain
+        chain = []
+        cur = self.root
+        done = False
+        while not done:
+            out_token = out_tokens[cur.idx + 1]
+            chain.append(VerifiedToken(out_token, cur.idx))
 
-                if cur.token != out_tokens[parent.idx + 1]:
-                    # Not visit the sub tree if not accepted
-                    return False
+            done = True
+            for child in cur.children:
+                if child.token == out_token:
+                    cur = child
+                    done = False
+                    break
 
-                cur_chain.append(cur)
-                longest_chain = (
-                    longest_chain
-                    if len(longest_chain) >= len(cur_chain)
-                    else cur_chain.copy()
+        return chain
+
+    def longest_acc_chain_mrss(
+        self, logits: torch.Tensor, draft_logits: torch.Tensor
+    ) -> list[VerifiedToken]:
+        """Longest accepted chain using multi-round speculative sampling
+
+            See EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty,
+                Appendix A.2 Algorithm 1
+
+            !! Code Not Verified !!
+
+        Args:
+            logits (torch.Tensor): [1, 1 + size(), n_vocab]
+                logits from original model
+            draft_logits (torch.Tensor): [1, 1 + size(), n_vocab]
+                logits from draft model
+
+        Returns:
+            list[VerifiedToken]: [1, 1 + size()]
+        """
+        assert logits.shape[1] >= self.size() + 1
+
+        logits = logits[0, -self.size() - 1 :]
+
+        chain = []
+        cur = self.root
+        done = False
+        while not done:
+            done = True
+            for child in cur.children:
+                r = random.random()
+                th = (
+                    logits[cur.idx + 1, child.token].item()
+                    / draft_logits[cur.idx + 1, child.token].item()
                 )
-            return True
+                if r < th:
+                    chain.append(VerifiedToken(child.token, cur.idx))
+                    cur = child
+                    done = False
+                    break
 
-        def post_visit(cur: Node, parent: Node):
-            if parent is not None:
-                nonlocal cur_chain
-                cur_chain.pop()
+        p = (logits[cur.idx + 1] - draft_logits[cur.idx]).cpu().numpy()
+        p /= np.sum(p)
+        token = np.random.choice(logits.shape[-1], p=p)
+        chain.append(VerifiedToken(token, cur.idx))
 
-        self.dfs(visit, post_visit)
-
-        return longest_chain
+        return chain
 
     @staticmethod
     def do_dfs(

@@ -70,8 +70,7 @@ class Recycle(Base):
         #     [2, 0, 0, 1, 0, 0, 0, 0],
         # ]
 
-        dtree = DraftTree()
-        dtree.root.token = all_tokens[0, -1].item()
+        dtree = DraftTree(all_tokens[0, -1].item())
 
         # Fill according to static tree
         cur_layer = [dtree.root]
@@ -118,19 +117,12 @@ class Recycle(Base):
     def verify(
         self, in_tokens: torch.Tensor, logits: torch.Tensor, dtree: DraftTree
     ) -> tuple[torch.Tensor, list[int]]:
-        n_dr = dtree.size()
-
-        # Greedy decoding
-        out_tokens = torch.argmax(logits[0, -n_dr - 1 :], dim=-1).tolist()  # [1 + n_dr]
-
-        # Verify draft
-        longest_acc_chain = dtree.longest_acc_chain(out_tokens)
+        # Verify
+        chain = dtree.longest_acc_chain_gd(logits)
 
         # Output
-        dr_idx = [n.idx for n in longest_acc_chain]
-        out_tokens = [out_tokens[0]] + [
-            out_tokens[n.idx + 1] for n in longest_acc_chain
-        ]
+        out_tokens = [vt.token for vt in chain]
+        dr_idx = [vt.idx for vt in chain[1:]]
 
         out_tokens = torch.tensor(
             out_tokens, dtype=torch.long, device=self.device
