@@ -34,6 +34,7 @@ def save_jsonl(obj_list: list, jsonl_path: str):
     with open(jsonl_path, "w") as f:
         for obj in obj_list:
             json.dump(obj, f)
+            f.write("\n")
 
 
 def real_basename(path: str):

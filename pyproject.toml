@@ -10,7 +10,8 @@ requires-python = ">=3.10"
 dependencies = [
     "transformers (==4.49.0)",
     "torch (==2.6.0)",
-    "accelerate (==1.4.0)"
+    "accelerate (==1.4.0)",
+    "prettytable (>=3.15.1,<4.0.0)"
 ]
 
 [tool.poetry]
