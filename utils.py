@@ -1,7 +1,15 @@
-import json
+import os, json
 import decoding
 
-__all__ = ["load_json", "save_json", "load_jsonl", "save_jsonl", "apply_dec"]
+__all__ = [
+    "load_json",
+    "save_json",
+    "load_jsonl",
+    "save_jsonl",
+    "real_basename",
+    "apply_dec",
+    "chat_template",
+]
 
 
 def load_json(json_path: str):
@@ -28,6 +36,12 @@ def save_jsonl(obj_list: list, jsonl_path: str):
             json.dump(obj, f)
 
 
+def real_basename(path: str):
+    if path.endswith(os.sep):
+        path = path.removesuffix(os.sep)
+    return os.path.basename(path)
+
+
 def apply_dec(model, dec_type: str):
     match dec_type:
         case "hf":
@@ -42,3 +56,17 @@ def apply_dec(model, dec_type: str):
             assert ValueError(dec_type)
 
     return None
+
+
+chat_template = {}
+
+chat_template["qwen2"] = {
+    "sys": """<|im_start|>system
+You are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>""",
+    "usr": """
+<|im_start|>user
+{content}<|im_end|>""",
+    "gen": """
+<|im_start|>assistant
+""",
+}

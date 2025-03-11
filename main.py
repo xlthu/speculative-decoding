@@ -10,16 +10,14 @@ def gen_one(
     tokenizer: PreTrainedTokenizer,
     prompt: str,
 ):
+    tpl = chat_template[model.model_type]
     messages = [
-        {
-            "role": "system",
-            "content": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
-        },
-        {"role": "user", "content": prompt},
+        tpl["sys"],
+        tpl["usr"].format(content=prompt),
+        tpl["gen"],
     ]
-    text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    text = "".join(messages)
+    print(text)
     input_ids = tokenizer([text], return_tensors="pt").input_ids.to(model.device)
 
     output = model.generate(input_ids, max_new_tokens=args.max_new_tokens)
@@ -39,10 +37,7 @@ def gen_one(
 
 def main(args):
     model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        torch_dtype="auto",
-        device_map=args.device,
-        attn_implementation="eager",
+        args.model, torch_dtype="auto", device_map=args.device
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = apply_dec(model, args.decode)

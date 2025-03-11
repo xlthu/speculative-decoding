@@ -11,18 +11,6 @@ from tqdm import tqdm
 
 from utils import *
 
-# Qwen chat template
-msg_sys = """<|im_start|>system
-You are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>"""
-
-msg_usr = """
-<|im_start|>user
-{content}<|im_end|>
-"""
-
-msg_assistant = """<|im_start|>assistant
-"""
-
 
 def eval_one(
     model: decoding.Base,
@@ -33,6 +21,8 @@ def eval_one(
     cache = DynamicCache()
     stat = decoding.Stat()
 
+    tpl = chat_template[model.model_type]
+
     for i, turn in enumerate(question["turns"]):
         if i != 0:
             assert (
@@ -42,17 +32,18 @@ def eval_one(
         # Input
         messages = []
         if i == 0:  # And system message for first-time chat
-            messages.append(msg_sys)
-        messages.append(msg_usr.format(content=turn))  # User message for this turn
-        messages.append(msg_assistant)
+            messages.append(tpl["sys"])
+        messages.append(tpl["usr"].format(content=turn))  # User message for this turn
+        messages.append(tpl["gen"])
         text = "".join(messages)
         turn_tokens = tokenizer([text], return_tensors="pt").input_ids.to(model.device)
 
         # Forward
         all_tokens = torch.cat((all_tokens, turn_tokens), dim=-1)
-        output = model.generate(
-            all_tokens, max_new_tokens=args.max_new_tokens, cache=cache, stat=stat
-        )
+        with stat.tik_tok("generate"):
+            output = model.generate(
+                all_tokens, max_new_tokens=args.max_new_tokens, cache=cache, stat=stat
+            )
 
         # Output
         cache = output["cache"]
@@ -70,7 +61,7 @@ def main(args):
     # Output
     os.makedirs("output", exist_ok=True)
     if args.output is None:
-        args.output = f"output/{os.path.basename(args.model)}-{args.decode}.json"
+        args.output = f"output/{real_basename(args.model)}-{args.decode}.json"
 
     # Model
     model = AutoModelForCausalLM.from_pretrained(

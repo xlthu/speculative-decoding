@@ -13,6 +13,10 @@ class Base(nn.Module):
         self.model = model
 
     @property
+    def model_type(self):
+        return self.model.config.model_type
+
+    @property
     def device(self):
         return self.model.device
 
