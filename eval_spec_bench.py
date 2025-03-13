@@ -5,7 +5,6 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     PreTrainedTokenizer,
-    DynamicCache,
 )
 from tqdm import tqdm
 
@@ -18,7 +17,7 @@ def eval_one(
     question: dict,
 ):
     all_tokens = torch.empty((1, 0), dtype=torch.long, device=model.device)
-    cache = DynamicCache()
+    cache = decoding.DynamicCache()
     stat = decoding.Stat()
 
     tpl = chat_template[model.model_type]

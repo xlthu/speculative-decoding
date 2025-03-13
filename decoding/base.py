@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-from transformers import DynamicCache
 
+from .cache import DynamicCache
 from .stat import Stat
 
 __all__ = ["Base"]
@@ -58,11 +58,14 @@ class Base(nn.Module):
                     attention_mask=attention_mask,
                     position_ids=position_ids,
                     past_key_values=cache,
+                    output_hidden_states=True,
                     return_dict=True,
                 )
 
             # Output
             cache = output.past_key_values
+            cache.update_hidden(output.hidden_states[-1])
+
             with stat.tik_tok("obtain_output"):
                 out_tokens = self.obtain_output(in_tokens, output.logits, cache)
             stat.put("acc_len", out_tokens.shape[1])

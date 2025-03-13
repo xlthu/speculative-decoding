@@ -1,8 +1,8 @@
 import torch
-from transformers import DynamicCache
 
 from .base import Base
 from .utils import chain_attention_mask, chain_position_ids
+from .cache import DynamicCache
 
 __all__ = ["AutoRegressive"]
 

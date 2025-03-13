@@ -1,8 +1,8 @@
 import torch
-from transformers import DynamicCache
 
 from .base import Base
 from .stat import Stat
+from .cache import DynamicCache
 
 __all__ = ["HF"]
 

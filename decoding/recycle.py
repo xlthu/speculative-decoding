@@ -1,9 +1,9 @@
 import torch
-from transformers import DynamicCache
 
 from .base import Base
 from .dtree import *
 from .utils import tree_attention_mask, tree_position_ids
+from .cache import DynamicCache
 
 __all__ = ["Recycle"]
 
