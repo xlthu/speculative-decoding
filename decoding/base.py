@@ -42,10 +42,6 @@ class Base(nn.Module):
         all_tokens = torch.clone(input_ids)  # [1, n]
 
         while True:
-            n_past = cache.get_seq_length()
-            print(f"=== {n_past} ===")
-            print(f"{all_tokens=}")
-
             # Input
             with stat.tik_tok("get_input"):
                 in_tokens, attention_mask, position_ids = self.get_input(

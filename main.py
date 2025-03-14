@@ -1,6 +1,7 @@
 import argparse
 import decoding
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer
+import numpy as np
 
 from utils import *
 
@@ -28,9 +29,14 @@ def gen_one(
         for input_ids, output_ids in zip(input_ids, generated_ids)
     ]
     print(f"{generated_ids=}")
-    print(f"{output['stat']=}")
 
-    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    stat = output["stat"]
+    for label in stat:
+        print(f"{label}")
+        print(f"  mean = {np.mean(stat[label])}")
+        print(f"  sum = {np.sum(stat[label])}")
+
+    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=False)[0]
 
     return response
 

@@ -235,13 +235,13 @@ class DraftTree:
         """
         self.do_dfs(visit, post_visit, self.root)
 
-    def debug(self):
+    def debug(self, print_func=print):
         """Print a tree representation"""
         indent = 0
 
         def visit(cur: Node, parent: Node):
             nonlocal indent
-            print(" " * indent, cur)
+            print_func(" " * indent, cur)
             indent += 4
             return True
 
@@ -249,8 +249,8 @@ class DraftTree:
             nonlocal indent
             indent -= 4
 
-        print("[tree]")
+        print_func("[tree]")
         self.dfs(visit, post_visit)
 
-        print(f"[tokens] {self._tokens}")
-        print(f"[pos]    {self._pos}")
+        print_func(f"[tokens] {self._tokens}")
+        print_func(f"[pos]    {self._pos}")

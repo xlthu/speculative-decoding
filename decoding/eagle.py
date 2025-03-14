@@ -21,8 +21,10 @@ class Log:
     def pop(self, step=2):
         self.prefix = self.prefix[: -(step + 1)]
 
-    def log(self, msg: str):
-        print(f"{self.prefix}{msg}")
+    def log(self, *args):
+        if False:
+            print(f"{self.prefix}", end="")
+            print(*args)
 
     @contextlib.contextmanager
     def scope(self, label: str):
@@ -66,13 +68,16 @@ class Eagle(Base):
         self, all_tokens: torch.Tensor, cache: DynamicCache
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         n_past = cache.get_seq_length()
+        logger.log(f"=== {n_past} ===")
+        logger.log(f"{all_tokens=}")
 
         # Decided
         dc_tokens = all_tokens[:, n_past:]
         n_dc = dc_tokens.shape[1]
 
         # Drafted
-        dtree = self.draft(all_tokens, cache)
+        with logger.scope("draft"):
+            dtree = self.draft(all_tokens, cache)
         dr_tokens = dtree.tokens(self.device)
 
         # Input
@@ -88,7 +93,6 @@ class Eagle(Base):
         return in_tokens, attention_mask, position_ids
 
     def draft(self, all_tokens: torch.Tensor, cache: DynamicCache) -> DraftTree:
-        logger.enter_scope(f"draft")
         n_past = cache.get_seq_length()
         n_dc = all_tokens.shape[1] - n_past
 
@@ -97,7 +101,6 @@ class Eagle(Base):
 
         if n_dc > 1:
             # Cannot draft due to the missing hidden states of main model
-            logger.exit_scope(f"draft")
             return DraftTree().done()
 
         device = all_tokens.device
@@ -120,41 +123,49 @@ class Eagle(Base):
         dtree = DraftTree(all_tokens[0, -1].item())
         all_hidden = out_hidden[:, -1:, :]
         layer = self.expand(logits, [dtree.root])
+        all_nodes = [dtree.root] + layer
 
         # Expansion
         for h in range(self.h):
-            logger.enter_scope(f"===== {h} =====")
-            # Forward
-            dm_n_past = self.dm_cache.get_seq_length()
-            pidx = long_tensor([n.parent.idx + 1 for n in layer])
-            in_hidden = all_hidden.index_select(-2, pidx)
-            in_tokens = long_tensor([[n.token for n in layer]])
-            attention_mask = self.layer_attention_mask(
-                dm_n_past, layer, self.dm.dtype, device
-            )
-            position_ids = long_tensor([[h + dm_n_past_saved] * len(layer)])
-            logger.log(f"{pidx=}")
-            logger.log(f"{in_tokens=}")
-            logger.log(f"{position_ids=}")
+            with logger.scope(f"===== {h} ====="):
+                # Forward
+                dm_n_past = self.dm_cache.get_seq_length()
+                pidx = long_tensor([n.parent.idx + 1 for n in layer])
+                in_hidden = all_hidden.index_select(-2, pidx)
+                in_tokens = long_tensor([[n.token for n in layer]])
+                attention_mask = self.layer_attention_mask(
+                    dm_n_past, layer, self.dm.dtype, device
+                )
+                position_ids = long_tensor([[h + dm_n_past_saved] * len(layer)])
+                logger.log(f"{pidx=}")
+                logger.log(f"{in_tokens=}")
+                logger.log(f"{position_ids=}")
 
-            out_hidden, logits = self.dm_forward(
-                in_hidden, in_tokens, attention_mask, position_ids
-            )
+                out_hidden, logits = self.dm_forward(
+                    in_hidden, in_tokens, attention_mask, position_ids
+                )
 
-            # Expand
-            all_hidden = torch.cat((all_hidden, out_hidden), dim=-2)
-            layer = self.expand(logits, layer)
+                # Expand
+                all_hidden = torch.cat((all_hidden, out_hidden), dim=-2)
+                layer = self.expand(logits, layer)
+                all_nodes.extend(layer)
 
-            logger.log(f"{all_hidden.shape=}")
-            dtree.debug()
-            logger.exit_scope(f"===== {h} =====")
+                logger.log(f"{all_hidden.shape=}")
+                dtree.debug(logger.log)
 
-        # Reranking(TODO)
+        # Reranking
+        with logger.scope("rerank"):
+            logger.log(f"before:")
+            dtree.debug(logger.log)
+
+            self.rerank(all_nodes)
+
+            logger.log(f"after:")
+            dtree.debug(logger.log)
 
         # Remove all draft tokens
         self.dm_cache.pick(dm_n_past_saved)
 
-        logger.exit_scope(f"draft")
         return dtree.done()
 
     def expand(self, logits: torch.Tensor, layer: list[Node]):
@@ -185,6 +196,13 @@ class Eagle(Base):
                 child.parent.add_child(child)
 
         return next_layer
+
+    def rerank(self, all_nodes: list[Node]):
+        all_nodes.sort(key=lambda node: (node.score, -node.idx), reverse=True)
+        reserved = all_nodes[: self.m]
+        for node in reserved:
+            node.children = [child for child in node.children if child in reserved]
+        return reserved
 
     def layer_attention_mask(self, n_past: int, layer: list[Node], dtype, device):
         with logger.scope("layer_attention_mask"):
