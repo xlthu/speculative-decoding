@@ -57,7 +57,7 @@ def apply_dec(model, dec_type: str, eagle_path: str):
         case "ea":
             ea = decoding.eagle_model.EAModel.from_pretrained(eagle_path)
             ea = ea.to(model.device)
-            return decoding.Eagle(model, ea, h=2, k=2, m=4)
+            return decoding.Eagle(model, ea, h=1, k=2, m=4)
         case _:
             assert ValueError(dec_type)
 

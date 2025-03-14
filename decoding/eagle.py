@@ -105,11 +105,11 @@ class Eagle(Base):
         def long_tensor(data):
             return torch.tensor(data, dtype=torch.long, device=device)
 
-        # Fill dm kv cache
+        # Fill dm kv cache & inference on root (last token of all_tokens)
         start = self.dm_cache.get_seq_length()
-        self.dm_forward(
-            hidden_states=cache.hidden[:, start:-1, :],
-            in_tokens=all_tokens[:, start + 1 : -1],
+        out_hidden, logits = self.dm_forward(
+            hidden_states=cache.hidden[:, start:, :],
+            in_tokens=all_tokens[:, start + 1 :],
             attention_mask=None,
             position_ids=None,
         )
@@ -117,23 +117,22 @@ class Eagle(Base):
         logger.log(f"{dm_n_past_saved=}")
 
         # Init by last token of all_tokens
-        all_hidden = cache.hidden[:, -1:, :]
         dtree = DraftTree(all_tokens[0, -1].item())
-        n_dr = 0
-        layer = [dtree.root]
+        all_hidden = out_hidden[:, -1:, :]
+        layer = self.expand(logits, [dtree.root])
 
         # Expansion
         for h in range(self.h):
             logger.enter_scope(f"===== {h} =====")
             # Forward
             dm_n_past = self.dm_cache.get_seq_length()
-            pidx = long_tensor([n.parent.idx + 1 if n.parent else 0 for n in layer])
+            pidx = long_tensor([n.parent.idx + 1 for n in layer])
             in_hidden = all_hidden.index_select(-2, pidx)
             in_tokens = long_tensor([[n.token for n in layer]])
             attention_mask = self.layer_attention_mask(
-                dm_n_past, n_dr, layer, self.dm.dtype, device
+                dm_n_past, layer, self.dm.dtype, device
             )
-            position_ids = long_tensor([[h + dm_n_past] * len(layer)])
+            position_ids = long_tensor([[h + dm_n_past_saved] * len(layer)])
             logger.log(f"{pidx=}")
             logger.log(f"{in_tokens=}")
             logger.log(f"{position_ids=}")
@@ -142,31 +141,11 @@ class Eagle(Base):
                 in_hidden, in_tokens, attention_mask, position_ids
             )
 
-            # Populate the next layer with top-k children of each node
-            next_layer: list[Node] = []
-            for i, parent in enumerate(layer):
-                _, out_tokens = torch.topk(logits[0, i], self.k)
-                out_tokens = out_tokens.tolist()
-
-                for token in out_tokens:
-                    score = logits[0, i, token].item() * parent.score
-                    next_layer.append(Node(token, score, parent))
-            logger.log(f"{next_layer=}")
-
-            # Top-k across all children
-            next_layer.sort(key=lambda n: n.score, reverse=True)
-            next_layer = next_layer[: self.k]
-            logger.log(f"{next_layer=}")
-
-            # Update
+            # Expand
             all_hidden = torch.cat((all_hidden, out_hidden), dim=-2)
+            layer = self.expand(logits, layer)
+
             logger.log(f"{all_hidden.shape=}")
-            for i, child in enumerate(next_layer):
-                # pos not set or used
-                child.idx = n_dr + i
-                child.parent.add_child(child)
-            n_dr += len(next_layer)
-            layer = next_layer
             dtree.debug()
             logger.exit_scope(f"===== {h} =====")
 
@@ -178,10 +157,39 @@ class Eagle(Base):
         logger.exit_scope(f"draft")
         return dtree.done()
 
-    def layer_attention_mask(
-        self, n_past: int, n_past_dr: int, layer: list[Node], dtype, device
-    ):
+    def expand(self, logits: torch.Tensor, layer: list[Node]):
+        with logger.scope("expand"):
+            # Populate the next layer with top-k children of each node
+            next_layer: list[Node] = []
+            for i, parent in enumerate(layer):
+                _, out_tokens = torch.topk(logits[0, i], self.k)
+                out_tokens = out_tokens.tolist()
+
+                for token in out_tokens:
+                    score = logits[0, i, token].item() * parent.score
+                    next_layer.append(Node(token, score, parent))
+
+            logger.log(f"before topk, {next_layer=}")
+
+            # Top-k across all children
+            next_layer.sort(key=lambda n: n.score, reverse=True)
+            next_layer = next_layer[: self.k]
+
+            logger.log(f"after topk, {next_layer=}")
+
+            # Link into tree
+            n_past_dr = layer[-1].idx + 1
+            for i, child in enumerate(next_layer):
+                # pos not set or used
+                child.idx = n_past_dr + i
+                child.parent.add_child(child)
+
+        return next_layer
+
+    def layer_attention_mask(self, n_past: int, layer: list[Node], dtype, device):
         with logger.scope("layer_attention_mask"):
+            n_past_dr = layer[-1].idx + 1
+
             logger.log(f"{n_past=}")
             logger.log(f"{n_past_dr=}")
             logger.log(f"{layer=}")

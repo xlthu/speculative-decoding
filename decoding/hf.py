@@ -17,9 +17,7 @@ class HF(Base):
         cache: DynamicCache = None,
         stat: Stat = None,
     ):
-        assert (
-            cache is None and past_ids is None
-        ), "Multi-turn conversations are not supported"
+        assert cache is None, "Multi-turn conversations are not supported"
         assert stat is None, "Statistic is not supported"
 
         attention_mask = torch.ones_like(input_ids)
