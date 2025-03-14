@@ -1,5 +1,6 @@
 import os, json
 import decoding
+import decoding.eagle_model
 
 __all__ = [
     "load_json",
@@ -43,7 +44,7 @@ def real_basename(path: str):
     return os.path.basename(path)
 
 
-def apply_dec(model, dec_type: str):
+def apply_dec(model, dec_type: str, eagle_path: str):
     match dec_type:
         case "hf":
             return decoding.HF(model)
@@ -53,6 +54,10 @@ def apply_dec(model, dec_type: str):
             return decoding.PLD(model)
         case "cyc":
             return decoding.Recycle(model, model.config.vocab_size)
+        case "ea":
+            ea = decoding.eagle_model.EAModel.from_pretrained(eagle_path)
+            ea = ea.to(model.device)
+            return decoding.Eagle(model, ea, h=2, k=2, m=4)
         case _:
             assert ValueError(dec_type)
 

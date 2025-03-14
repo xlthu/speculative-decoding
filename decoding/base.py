@@ -42,8 +42,9 @@ class Base(nn.Module):
         all_tokens = torch.clone(input_ids)  # [1, n]
 
         while True:
-            # n_past = cache.get_seq_length()
-            # print(f"=== {n_past} ===")
+            n_past = cache.get_seq_length()
+            print(f"=== {n_past} ===")
+            print(f"{all_tokens=}")
 
             # Input
             with stat.tik_tok("get_input"):
@@ -65,6 +66,7 @@ class Base(nn.Module):
             # Output
             cache = output.past_key_values
             cache.update_hidden(output.hidden_states[-1])
+            assert cache.get_seq_length() == cache.hidden.shape[-2]
 
             with stat.tik_tok("obtain_output"):
                 out_tokens = self.obtain_output(in_tokens, output.logits, cache)
@@ -151,34 +153,3 @@ class Base(nn.Module):
                 return True
 
         return False
-
-    def update_kv_cache(
-        self, cache: DynamicCache, n_reserved: int, picked: list[int] = None
-    ):
-        """Update KV Cache after evaluation
-
-            First, reserve `n_reserved` lines from the beginning of `cache`.
-            Then, pick the lines indexed by `picked` and append them to `cache`.
-
-        Args:
-            cache (DynamicCache): KV Cache after evaluated
-            n_reserved (int): #Reserved lines from the beginning
-            picked (list[int]): Indecics of lines to pick after the reserved lines
-        """
-        if not picked:
-            cache.crop(n_reserved)
-            return
-
-        picked = torch.tensor(picked, dtype=torch.long, device=self.device)
-
-        def update(tensor: torch.Tensor):
-            return torch.cat(
-                (tensor[..., :n_reserved, :], tensor.index_select(-2, picked)), dim=-2
-            )
-
-        for lid in range(len(cache.key_cache)):
-            # [batch_size, num_heads, seq_len, head_dim]
-            cache.key_cache[lid] = update(cache.key_cache[lid])
-            cache.value_cache[lid] = update(cache.value_cache[lid])
-
-        cache._seen_tokens = n_reserved + len(picked)

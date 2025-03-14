@@ -1,4 +1,4 @@
-from decoding import DraftTree
+from decoding import DraftTree, Node
 import torch
 
 device = "cpu"
@@ -6,17 +6,17 @@ device = "cpu"
 # Create
 dtree = DraftTree()
 
-n = [dtree.new_node(i) for i in range(7)]
+n = [Node(i) for i in range(7)]
 
-dtree.root.add(n[0])
-n[0].add(n[1])
+dtree.root.add_child(n[0])
+n[0].add_child(n[1])
 
-n[1].add(n[2])
-n[1].add(n[3])
+n[1].add_child(n[2])
+n[1].add_child(n[3])
 
-dtree.root.add(n[4])
-n[4].add(n[5])
-n[5].add(n[6])
+dtree.root.add_child(n[4])
+n[4].add_child(n[5])
+n[5].add_child(n[6])
 
 dtree.done()
 

@@ -108,7 +108,7 @@ class Recycle(Base):
         # Update kv cache
         n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
         dr_idx = [n_reserved + i for i in dr_idx]
-        self.update_kv_cache(cache, n_reserved, dr_idx)
+        cache.pick(n_reserved, dr_idx)
 
         # Update adjacency matrix
         self.update_adj_mat(in_tokens, logits)

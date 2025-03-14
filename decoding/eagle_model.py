@@ -198,7 +198,11 @@ class EAModel(Qwen2PreTrainedModel):
         )
         return output if return_dict else output.to_tuple()
 
-    _update_causal_mask = Qwen2Model._update_causal_mask
-    _prepare_4d_causal_attention_mask_with_cache_position = (
-        Qwen2Model._prepare_4d_causal_attention_mask_with_cache_position
-    )
+    def _update_causal_mask(self, *args, **kwargs):
+        return Qwen2Model._update_causal_mask(self, *args, **kwargs)
+
+    @staticmethod
+    def _prepare_4d_causal_attention_mask_with_cache_position(*args, **kwargs):
+        return Qwen2Model._prepare_4d_causal_attention_mask_with_cache_position(
+            *args, **kwargs
+        )

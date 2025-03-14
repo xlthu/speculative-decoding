@@ -40,7 +40,7 @@ def main(args):
         args.model, torch_dtype="auto", device_map=args.device
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = apply_dec(model, args.decode)
+    model = apply_dec(model, args.decode, args.eagle)
 
     response = gen_one(model, tokenizer, args.prompt)
 
@@ -53,14 +53,20 @@ if __name__ == "__main__":
         "-m",
         "--model",
         type=str,
-        default="./models/Qwen2.5-0.5B-Instruct",
+        default="./models/Qwen2-7B-Instruct",
         help="Model name or path",
+    )
+    parser.add_argument(
+        "--eagle",
+        type=str,
+        default="./models/EAGLE-Qwen2-7B-Instruct",
+        help="Eagle model path",
     )
     parser.add_argument(
         "-d",
         "--decode",
         type=str,
-        choices=["hf", "ar", "pld", "cyc"],
+        choices=["hf", "ar", "pld", "cyc", "ea"],
         default="ar",
         help="Decoding mode",
     )

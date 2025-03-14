@@ -1,16 +1,64 @@
 import torch
 
 from .base import Base
+from .eagle_model import EAModel
 from .dtree import *
 from .utils import tree_attention_mask, tree_position_ids
 from .cache import DynamicCache
 
 __all__ = ["Eagle"]
 
+import contextlib
+
+
+class Log:
+    def __init__(self):
+        self.prefix = ""
+
+    def push(self, step=2):
+        self.prefix += "|" + " " * step
+
+    def pop(self, step=2):
+        self.prefix = self.prefix[: -(step + 1)]
+
+    def log(self, msg: str):
+        print(f"{self.prefix}{msg}")
+
+    @contextlib.contextmanager
+    def scope(self, label: str):
+        self.enter_scope(label)
+        yield
+        self.exit_scope(label)
+
+    def enter_scope(self, label: str):
+        self.log(f"[{label}]")
+        self.push()
+
+    def exit_scope(self, label: str):
+        self.pop()
+        self.log(f"[{label}]")
+
+
+logger = Log()
+
 
 class Eagle(Base):
-    def __init__(self, model):
+    def __init__(self, model, draft_model: EAModel, h: int, k: int, m: int):
+        """Eagle
+
+        Args:
+            model (Huggingface Models): Main model
+            draft_model (EAModel): Eagle draft model
+            h (int): Draft tree depth
+            k (int): Top-k ranking
+            m (int): Total draft tokens
+        """
         super().__init__(model)
+        self.dm = draft_model
+        self.dm_cache = DynamicCache()
+        self.h = h
+        self.k = k
+        self.m = m
 
     ### Input
 
@@ -24,7 +72,7 @@ class Eagle(Base):
         n_dc = dc_tokens.shape[1]
 
         # Drafted
-        dtree = self.draft(all_tokens)
+        dtree = self.draft(all_tokens, cache)
         dr_tokens = dtree.tokens(self.device)
 
         # Input
@@ -39,9 +87,156 @@ class Eagle(Base):
 
         return in_tokens, attention_mask, position_ids
 
-    def draft(self, all_tokens: torch.Tensor) -> DraftTree:
-        # TODO
-        return DraftTree().done()
+    def draft(self, all_tokens: torch.Tensor, cache: DynamicCache) -> DraftTree:
+        logger.enter_scope(f"draft")
+        n_past = cache.get_seq_length()
+        n_dc = all_tokens.shape[1] - n_past
+
+        logger.log(f"{n_past=}")
+        logger.log(f"{n_dc=}")
+
+        if n_dc > 1:
+            # Cannot draft due to the missing hidden states of main model
+            logger.exit_scope(f"draft")
+            return DraftTree().done()
+
+        device = all_tokens.device
+
+        def long_tensor(data):
+            return torch.tensor(data, dtype=torch.long, device=device)
+
+        # Fill dm kv cache
+        start = self.dm_cache.get_seq_length()
+        self.dm_forward(
+            hidden_states=cache.hidden[:, start:-1, :],
+            in_tokens=all_tokens[:, start + 1 : -1],
+            attention_mask=None,
+            position_ids=None,
+        )
+        dm_n_past_saved = self.dm_cache.get_seq_length()
+        logger.log(f"{dm_n_past_saved=}")
+
+        # Init by last token of all_tokens
+        all_hidden = cache.hidden[:, -1:, :]
+        dtree = DraftTree(all_tokens[0, -1].item())
+        n_dr = 0
+        layer = [dtree.root]
+
+        # Expansion
+        for h in range(self.h):
+            logger.enter_scope(f"===== {h} =====")
+            # Forward
+            dm_n_past = self.dm_cache.get_seq_length()
+            pidx = long_tensor([n.parent.idx + 1 if n.parent else 0 for n in layer])
+            in_hidden = all_hidden.index_select(-2, pidx)
+            in_tokens = long_tensor([[n.token for n in layer]])
+            attention_mask = self.layer_attention_mask(
+                dm_n_past, n_dr, layer, self.dm.dtype, device
+            )
+            position_ids = long_tensor([[h + dm_n_past] * len(layer)])
+            logger.log(f"{pidx=}")
+            logger.log(f"{in_tokens=}")
+            logger.log(f"{position_ids=}")
+
+            out_hidden, logits = self.dm_forward(
+                in_hidden, in_tokens, attention_mask, position_ids
+            )
+
+            # Populate the next layer with top-k children of each node
+            next_layer: list[Node] = []
+            for i, parent in enumerate(layer):
+                _, out_tokens = torch.topk(logits[0, i], self.k)
+                out_tokens = out_tokens.tolist()
+
+                for token in out_tokens:
+                    score = logits[0, i, token].item() * parent.score
+                    next_layer.append(Node(token, score, parent))
+            logger.log(f"{next_layer=}")
+
+            # Top-k across all children
+            next_layer.sort(key=lambda n: n.score, reverse=True)
+            next_layer = next_layer[: self.k]
+            logger.log(f"{next_layer=}")
+
+            # Update
+            all_hidden = torch.cat((all_hidden, out_hidden), dim=-2)
+            logger.log(f"{all_hidden.shape=}")
+            for i, child in enumerate(next_layer):
+                # pos not set or used
+                child.idx = n_dr + i
+                child.parent.add_child(child)
+            n_dr += len(next_layer)
+            layer = next_layer
+            dtree.debug()
+            logger.exit_scope(f"===== {h} =====")
+
+        # Reranking(TODO)
+
+        # Remove all draft tokens
+        self.dm_cache.pick(dm_n_past_saved)
+
+        logger.exit_scope(f"draft")
+        return dtree.done()
+
+    def layer_attention_mask(
+        self, n_past: int, n_past_dr: int, layer: list[Node], dtype, device
+    ):
+        with logger.scope("layer_attention_mask"):
+            logger.log(f"{n_past=}")
+            logger.log(f"{n_past_dr=}")
+            logger.log(f"{layer=}")
+
+            n_dr = len(layer)
+            min_dtype = torch.finfo(dtype).min
+
+            lmask = torch.full(
+                size=(n_dr, n_past),
+                fill_value=0.0,
+                dtype=dtype,
+                device=device,
+            )
+
+            rmask = torch.full(
+                size=(n_dr, n_past_dr + n_dr),
+                fill_value=min_dtype,
+                dtype=dtype,
+                device=device,
+            )
+            for i, node in enumerate(layer):
+                p = node
+                while p != None:
+                    rmask[i, p.idx + 1] = 0.0
+                    p = p.parent
+
+            mask = torch.cat((lmask, rmask), dim=-1)
+            mask = mask.reshape(1, 1, *mask.shape)
+
+            return mask
+
+    def dm_forward(
+        self,
+        hidden_states: torch.Tensor,
+        in_tokens: torch.Tensor,
+        attention_mask: torch.Tensor,
+        position_ids: torch.Tensor,
+    ):
+        with logger.scope("dm_forward"):
+            logger.log(f"{in_tokens=}")
+            logger.log(f"{hidden_states.shape=}")
+            output = self.dm(
+                hidden_states=hidden_states,
+                input_ids=in_tokens,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=self.dm_cache,
+                return_dict=True,
+            )
+            hidden = output.last_hidden_state
+            self.dm_cache = output.past_key_values
+
+            logits = self.model.lm_head(hidden)
+            logits = torch.nn.functional.softmax(logits, dim=-1)
+            return hidden, logits
 
     ### Output
 
@@ -57,7 +252,10 @@ class Eagle(Base):
         # Update kv cache
         n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
         dr_idx = [n_reserved + i for i in dr_idx]
-        self.update_kv_cache(cache, n_reserved, dr_idx)
+        cache.pick(n_reserved, dr_idx)
+
+        # Update dm kv cache
+        self.dm_cache.pick(n_reserved)
 
         return out_tokens
 

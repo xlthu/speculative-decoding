@@ -100,6 +100,6 @@ class PLD(Base):
 
         # Update
         if n_dr:
-            self.update_kv_cache(cache, cache.get_seq_length() - n_dr + acc_len - 1)
+            cache.pick(cache.get_seq_length() - n_dr + acc_len - 1)
 
         return out_tokens

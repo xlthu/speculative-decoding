@@ -8,21 +8,29 @@ __all__ = ["Node", "VerifiedToken", "DraftTree"]
 
 
 class Node:
-    def __init__(self, token: int):
+    def __init__(self, token: int, score: float = 1.0, parent: "Node" = None):
         self.token: int = token
+        self.score: float = score
+
         self.idx: int = -1  # Index in the flatten represetation
         self.pos: int = -1  # Real position in the text / Tree depth
+
+        self.parent = parent
         self.children: list[Node] = []
 
-    def add(self, child: "Node"):
+    def add_child(self, child: "Node"):
+        assert child.parent is None or child.parent == self
+        child.parent = self
         self.children.append(child)
 
     def __repr__(self):
         return (
             f"{self.__class__.__name__}("
             f"token={self.token}, "
+            f"score={self.score}, "
             f"idx={self.idx}, "
             f"pos={self.pos}, "
+            f"parent={self.parent.idx if self.parent else self.parent}, "
             f"children={[c.idx for c in self.children]}"
             f")"
         )
@@ -45,10 +53,6 @@ class DraftTree:
         self.root = Node(root_token)
         self._tokens: list[int] = []  # Flatten tokens
         self._pos: list[int] = []  # Flatten tositions
-
-    def new_node(self, token: int) -> Node:
-        """Use this to create node (for C++, recycle the memory)"""
-        return Node(token)
 
     def done(self) -> "DraftTree":
         """Called when all nodes are added"""
