@@ -249,9 +249,12 @@ class Eagle(Base):
         with logger.scope("dm_forward"):
             logger.log(f"{in_tokens=}")
             logger.log(f"{hidden_states.shape=}")
+
+            inputs_embeds = self.model.get_input_embeddings()(in_tokens)
+
             output = self.dm(
                 hidden_states=hidden_states,
-                input_ids=in_tokens,
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_values=self.dm_cache,
@@ -260,8 +263,9 @@ class Eagle(Base):
             hidden = output.last_hidden_state
             self.dm_cache = output.past_key_values
 
-            logits = self.model.lm_head(hidden)
+            logits = self.model.get_output_embeddings()(hidden)
             logits = torch.nn.functional.softmax(logits, dim=-1)
+
             return hidden, logits
 
     ### Output

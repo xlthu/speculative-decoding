@@ -56,7 +56,7 @@ def apply_dec(model, dec_type: str, eagle_path: str):
             return decoding.Recycle(model, model.config.vocab_size)
         case "ea":
             ea = decoding.eagle_model.EAModel.from_pretrained(eagle_path)
-            ea = ea.to(model.device)
+            ea = ea.to(device=model.device, dtype=model.dtype)
             return decoding.Eagle(model, ea, h=5, k=5, m=20)
         case _:
             assert ValueError(dec_type)
