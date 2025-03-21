@@ -134,7 +134,7 @@ class Eagle(Base):
                 in_hidden = all_hidden.index_select(-2, pidx)
                 in_tokens = long_tensor([[n.token for n in layer]])
                 attention_mask = self.layer_attention_mask(
-                    dm_n_past, layer, self.dm.dtype, device
+                    dm_n_past_saved, layer, self.dm.dtype, device
                 )
                 position_ids = long_tensor([[h + dm_n_past_saved] * len(layer)])
                 logger.log(f"{pidx=}")
@@ -206,7 +206,7 @@ class Eagle(Base):
 
     def layer_attention_mask(self, n_past: int, layer: list[Node], dtype, device):
         with logger.scope("layer_attention_mask"):
-            n_past_dr = layer[-1].idx + 1
+            n_past_dr = layer[0].idx + 1
 
             logger.log(f"{n_past=}")
             logger.log(f"{n_past_dr=}")
@@ -263,6 +263,9 @@ class Eagle(Base):
             hidden = output.last_hidden_state
             self.dm_cache = output.past_key_values
 
+            # NOTE: adapt to official EAGLE code
+            hidden = self.model.model.norm(hidden)
+
             logits = self.model.get_output_embeddings()(hidden)
             logits = torch.nn.functional.softmax(logits, dim=-1)
 
@@ -283,9 +286,6 @@ class Eagle(Base):
         n_reserved = cache.get_seq_length() - self.dtree.size()  # Remove draft tokens
         dr_idx = [n_reserved + i for i in dr_idx]
         cache.pick(n_reserved, dr_idx)
-
-        # Update dm kv cache
-        self.dm_cache.pick(n_reserved)
 
         return out_tokens
 
