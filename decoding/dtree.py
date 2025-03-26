@@ -8,7 +8,7 @@ __all__ = ["Node", "VerifiedToken", "DraftTree"]
 
 
 class Node:
-    def __init__(self, token: int, score: float = 1.0, parent: "Node" = None):
+    def __init__(self, token: int, score: float = 0.0, parent: "Node" = None):
         self.token: int = token
         self.score: float = score
 

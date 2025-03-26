@@ -129,7 +129,6 @@ class Eagle(Base):
         for h in range(self.h):
             with logger.scope(f"===== {h} ====="):
                 # Forward
-                dm_n_past = self.dm_cache.get_seq_length()
                 pidx = long_tensor([n.parent.idx + 1 for n in layer])
                 in_hidden = all_hidden.index_select(-2, pidx)
                 in_tokens = long_tensor([[n.token for n in layer]])
@@ -177,7 +176,7 @@ class Eagle(Base):
                 out_tokens = out_tokens.tolist()
 
                 for token in out_tokens:
-                    score = logits[0, i, token].item() * parent.score
+                    score = logits[0, i, token].item() + parent.score
                     next_layer.append(Node(token, score, parent))
 
             logger.log(f"before topk, {next_layer=}")
@@ -199,7 +198,7 @@ class Eagle(Base):
 
     def rerank(self, all_nodes: list[Node]):
         all_nodes.sort(key=lambda node: (node.score, -node.idx), reverse=True)
-        reserved = all_nodes[: self.m]
+        reserved = all_nodes[: self.m + 1]  # include root
         for node in reserved:
             node.children = [child for child in node.children if child in reserved]
         return reserved
@@ -267,7 +266,7 @@ class Eagle(Base):
             hidden = self.model.model.norm(hidden)
 
             logits = self.model.get_output_embeddings()(hidden)
-            logits = torch.nn.functional.softmax(logits, dim=-1)
+            logits = torch.nn.functional.log_softmax(logits, dim=-1)
 
             return hidden, logits
 
