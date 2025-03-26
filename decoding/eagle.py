@@ -123,7 +123,6 @@ class Eagle(Base):
         dtree = DraftTree(all_tokens[0, -1].item())
         all_hidden = out_hidden[:, -1:, :]
         layer = self.expand(logits[:, -1:, :], [dtree.root])
-        all_nodes = [dtree.root] + layer
 
         # Expansion
         for h in range(self.h):
@@ -147,7 +146,6 @@ class Eagle(Base):
                 # Expand
                 all_hidden = torch.cat((all_hidden, out_hidden), dim=-2)
                 layer = self.expand(logits, layer)
-                all_nodes.extend(layer)
 
                 logger.log(f"{all_hidden.shape=}")
                 dtree.debug(logger.log)
@@ -157,7 +155,7 @@ class Eagle(Base):
             logger.log(f"before:")
             dtree.debug(logger.log)
 
-            self.rerank(all_nodes)
+            self.rerank(dtree)
 
             logger.log(f"after:")
             dtree.debug(logger.log)
@@ -178,7 +176,9 @@ class Eagle(Base):
 
                 for token in out_tokens:
                     score = logits[0, i, token].item() + parent.score
-                    next_layer.append(Node(token, score, parent))
+                    child = Node(token, score, parent)
+                    parent.add_child(child)
+                    next_layer.append(child)
 
             logger.log(f"before topk, {next_layer=}")
 
@@ -188,21 +188,32 @@ class Eagle(Base):
 
             logger.log(f"after topk, {next_layer=}")
 
-            # Link into tree
+            # Set idx of top-k nodes for the next dm_forward
             n_past_dr = layer[-1].idx + 1
             for i, child in enumerate(next_layer):
-                # pos not set or used
                 child.idx = n_past_dr + i
-                child.parent.add_child(child)
 
         return next_layer
 
-    def rerank(self, all_nodes: list[Node]):
+    def rerank(self, dtree: DraftTree):
+        # Collect all nodes
+        all_nodes = []
+
+        def collect(cur: Node, parent: Node):
+            all_nodes.append(cur)
+            return True
+
+        dtree.dfs(collect)
+
+        # Sort
         all_nodes.sort(key=lambda node: (node.score, -node.idx), reverse=True)
         reserved = all_nodes[: self.m + 1]  # include root
+
+        # Remove
         for node in reserved:
             node.children = [child for child in node.children if child in reserved]
-        return reserved
+
+        return dtree
 
     def layer_attention_mask(self, n_past_dc: int, layer: list[Node], dtype, device):
         with logger.scope("layer_attention_mask"):
