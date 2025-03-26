@@ -204,11 +204,11 @@ class Eagle(Base):
             node.children = [child for child in node.children if child in reserved]
         return reserved
 
-    def layer_attention_mask(self, n_past: int, layer: list[Node], dtype, device):
+    def layer_attention_mask(self, n_past_dc: int, layer: list[Node], dtype, device):
         with logger.scope("layer_attention_mask"):
-            n_past_dr = layer[0].idx + 1
+            n_past_dr = layer[0].idx
 
-            logger.log(f"{n_past=}")
+            logger.log(f"{n_past_dc=}")
             logger.log(f"{n_past_dr=}")
             logger.log(f"{layer=}")
 
@@ -216,7 +216,7 @@ class Eagle(Base):
             min_dtype = torch.finfo(dtype).min
 
             lmask = torch.full(
-                size=(n_dr, n_past),
+                size=(n_dr, n_past_dc),
                 fill_value=0.0,
                 dtype=dtype,
                 device=device,
@@ -230,8 +230,8 @@ class Eagle(Base):
             )
             for i, node in enumerate(layer):
                 p = node
-                while p != None:
-                    rmask[i, p.idx + 1] = 0.0
+                while p.idx != -1:  # until root (excluded)
+                    rmask[i, p.idx] = 0.0
                     p = p.parent
 
             mask = torch.cat((lmask, rmask), dim=-1)
@@ -246,6 +246,16 @@ class Eagle(Base):
         attention_mask: torch.Tensor,
         position_ids: torch.Tensor,
     ):
+        if attention_mask is not None:
+            assert attention_mask.shape == (
+                1,
+                1,
+                in_tokens.shape[-1],
+                self.dm_cache.get_seq_length() + in_tokens.shape[-1],
+            )
+        if position_ids is not None:
+            assert position_ids.shape == in_tokens.shape
+
         with logger.scope("dm_forward"):
             logger.log(f"{in_tokens=}")
             logger.log(f"{hidden_states.shape=}")
