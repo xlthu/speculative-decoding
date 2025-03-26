@@ -151,21 +151,12 @@ class DraftTree:
 
         return chain
 
-    def longest_acc_chain_mrss(
-        self, logits: torch.Tensor, draft_logits: torch.Tensor
-    ) -> list[VerifiedToken]:
-        """Longest accepted chain using multi-round speculative sampling
-
-            See EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty,
-                Appendix A.2 Algorithm 1
-
-            !! Code Not Verified !!
+    def longest_acc_chain_topk(self, logits: torch.Tensor, k=2) -> list[VerifiedToken]:
+        """Longest accepted chain using top-k acceptance
 
         Args:
-            logits (torch.Tensor): [1, 1 + size(), n_vocab]
+            logits (torch.Tensor): [1, ..., n_vocab]
                 logits from original model
-            draft_logits (torch.Tensor): [1, 1 + size(), n_vocab]
-                logits from draft model
 
         Returns:
             list[VerifiedToken]: [1, 1 + size()]
@@ -173,6 +164,57 @@ class DraftTree:
         assert logits.shape[1] >= self.size() + 1
 
         logits = logits[0, -self.size() - 1 :]
+        _, out_tokens = torch.topk(logits, k)
+        out_tokens = out_tokens.tolist()  # [1 + size, k]
+
+        def get_matched_child(token: int, cur: Node):
+            for child in cur.children:
+                if child.token == token:
+                    return child
+            return None
+
+        chain = []
+        cur = self.root
+        done = False
+        while not done:
+            cur_out_tokens = out_tokens[cur.idx + 1]
+            vt = VerifiedToken(cur_out_tokens[0], cur.idx)
+
+            done = True
+            for token in cur_out_tokens:
+                child = get_matched_child(token, cur)
+                if child is not None:
+                    vt.token = token
+                    cur = child
+                    done = False
+                    break
+
+            chain.append(vt)
+
+        return chain
+
+    def longest_acc_chain_mrss(
+        self, logits: torch.Tensor, last_step_sample=True
+    ) -> list[VerifiedToken]:
+        """Longest accepted chain using (modified) multi-round speculative sampling
+
+            See EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty,
+                Appendix A.2 Algorithm 1
+
+            Modification: sample from original logits in the last step,
+                rather than from (original_logits - draft_logits)
+
+        Args:
+            logits (torch.Tensor): [1, 1 + size(), n_vocab]
+                logits from original model
+            last_step_sample (bool): sample or greedy in the last step
+
+        Returns:
+            list[VerifiedToken]: [1, 1 + size()]
+        """
+        assert logits.shape[1] >= self.size() + 1
+
+        probs = torch.softmax(logits[0, -self.size() - 1 :].float(), dim=-1)
 
         chain = []
         cur = self.root
@@ -180,20 +222,19 @@ class DraftTree:
         while not done:
             done = True
             for child in cur.children:
-                r = random.random()
-                th = (
-                    logits[cur.idx + 1, child.token].item()
-                    / draft_logits[cur.idx + 1, child.token].item()
-                )
-                if r < th:
+                p = probs[cur.idx + 1, child.token].item()
+                dp = np.exp(child.score - cur.score)
+                if random.random() < p / dp:
                     chain.append(VerifiedToken(child.token, cur.idx))
                     cur = child
                     done = False
                     break
 
-        p = (logits[cur.idx + 1] - draft_logits[cur.idx]).cpu().numpy()
-        p /= np.sum(p)
-        token = np.random.choice(logits.shape[-1], p=p)
+        if last_step_sample:
+            p = probs[cur.idx + 1].cpu().numpy()
+            token = np.random.choice(logits.shape[-1], p=p)
+        else:
+            token = torch.argmax(probs[cur.idx + 1], dim=-1)
         chain.append(VerifiedToken(token, cur.idx))
 
         return chain

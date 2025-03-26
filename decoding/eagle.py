@@ -122,7 +122,7 @@ class Eagle(Base):
         # Init by last token of all_tokens
         dtree = DraftTree(all_tokens[0, -1].item())
         all_hidden = out_hidden[:, -1:, :]
-        layer = self.expand(logits, [dtree.root])
+        layer = self.expand(logits[:, -1:, :], [dtree.root])
         all_nodes = [dtree.root] + layer
 
         # Expansion
@@ -168,6 +168,7 @@ class Eagle(Base):
         return dtree.done()
 
     def expand(self, logits: torch.Tensor, layer: list[Node]):
+        assert logits.shape[-2] == len(layer)
         with logger.scope("expand"):
             # Populate the next layer with top-k children of each node
             next_layer: list[Node] = []
